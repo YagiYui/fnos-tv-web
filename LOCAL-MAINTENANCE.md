@@ -18,3 +18,5 @@
 当前后端 Dockerfile 仍来自上游；它尚未整合生产中额外安装的 FFmpeg、字体、前端构建和 Compose 私有 tmpfs 等配置，不能把直接构建此仓库视作现有生产环境的完整复现。
 
 PGS 真实素材测试为可选项：设置 `PGS_TEST_FILE` 指向本地 `.sup` 后运行 `node --test pgs-decoder.test.mjs`。默认跳过，不把影片字幕素材纳入 Git；测试不再向仓库外写预览文件。
+
+构建工具安装策略仅允许 esbuild 的必要安装脚本（pnpm-workspace.yaml），避免新版 pnpm 生成未完成的审批模板后使 install/build 退出失败。没有放开其他依赖脚本。
