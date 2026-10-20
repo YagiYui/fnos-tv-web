@@ -1,0 +1,73 @@
+/* Fullscreen belongs to the inner Artplayer element, outside normal page sizing. */
+.art-video-player.fnos-mobile-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  z-index: 9999 !important;
+  border-radius: 0 !important;
+}
+.art-video-player.fnos-touch-player {
+  --art-control-height: 44px;
+  --art-control-icon-scale: 1;
+  --art-padding: 12px;
+  --art-settings-max-height: min(240px, 55vh);
+  --art-selector-max-height: min(220px, 50vh);
+  touch-action: manipulation;
+}
+.fnos-touch-player .art-controls .art-control {min-width:44px;min-height:44px;height:44px;font-size:13px}
+.fnos-touch-player .art-controls-left,.fnos-touch-player .art-controls-right {margin:0!important;align-items:center}
+.fnos-touch-player .art-controls-left {min-width:0}
+/* The plugin relocates its original widget below narrow players. Use the dedicated touch toolbar. */
+.fnos-touch-player .art-controls-center {display:none!important}
+.fnos-touch-player .artplayer-plugin-danmuku {display:none!important}
+.fnos-touch-player:has(>.artplayer-plugin-danmuku) {margin-bottom:0!important}
+.fnos-touch-player .art-control-volume,.fnos-touch-player .art-control-airplay {display:none!important}
+.fnos-touch-player:not(.fnos-mobile-fullscreen) .art-control-下一集 {display:none!important}
+.fnos-touch-player .art-control-time {min-width:0!important;padding:0 4px;font-size:11px;font-variant-numeric:tabular-nums}
+.fnos-touch-player .art-control-mobile-fullscreen {font-size:28px!important}
+.fnos-touch-player .art-back-button {min-height:44px;min-width:44px;padding:8px 10px}
+.fnos-touch-player .art-layer-title {top:max(6px,env(safe-area-inset-top))!important;left:max(4px,env(safe-area-inset-left))!important;right:172px!important;padding:0!important}
+.fnos-touch-player .art-player-heading {max-width:100%;gap:8px}
+.fnos-touch-player .art-player-heading .art-title {font-size:13px;max-width:calc(100% - 76px)}
+.fnos-touch-player .art-layer-danmuTitle {display:none!important}
+.fnos-touch-player .art-bottom {padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right));padding-bottom:env(safe-area-inset-bottom)}
+.fnos-touch-player .art-settings {right:max(12px,env(safe-area-inset-right));bottom:calc(64px + env(safe-area-inset-bottom));max-width:calc(100% - 24px)}
+.fnos-touch-player .art-selector-list {max-width:min(320px,80vw);overflow-x:hidden}
+.fnos-touch-player .art-selector-item {min-height:40px;white-space:normal;line-height:1.4;display:flex;align-items:center}
+.fnos-touch-player.fnos-mobile-fullscreen {--art-settings-max-height:calc(var(--fnos-player-height,100dvh) - 110px);--art-selector-max-height:calc(var(--fnos-player-height,100dvh) - 110px)}
+.fnos-touch-player.fnos-landscape-rotated .art-bottom {padding:0 max(16px,env(safe-area-inset-bottom)) 8px max(16px,env(safe-area-inset-top))}
+.fnos-touch-player.fnos-landscape-rotated .art-layer-title {top:6px!important;left:max(8px,env(safe-area-inset-top))!important}
+.fnos-touch-player.fnos-landscape-rotated .art-selector-list {max-width:65vh}
+@media(max-width:360px) {
+  .fnos-touch-player:not(.fnos-mobile-fullscreen) .art-control-time {max-width:64px;overflow:hidden;text-overflow:ellipsis}
+}
+
+.fnos-touch-player:not(.fnos-mobile-fullscreen) .art-player-heading .art-title {display:none}
+.fnos-touch-player .art-layers {z-index:80}
+.fnos-touch-player .art-layer-mobile-danmaku {position:absolute;top:max(6px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right));z-index:65;pointer-events:auto}
+.fnos-danmaku-tools {position:relative;display:flex;gap:6px;align-items:center;color:#fff;font-size:12px}
+.fnos-danmaku-tools button {min-height:44px;padding:8px 10px;border:1px solid #ffffff40;border-radius:6px;background:#000a;color:#fff;font:inherit;cursor:pointer;touch-action:manipulation}
+.fnos-danmaku-tools button[aria-pressed="true"] {border-color:#9ecbff;color:#d5e9ff}
+.fnos-danmaku-tools button:focus-visible,.fnos-danmaku-tools input:focus-visible {outline:2px solid #fff;outline-offset:2px}
+.fnos-danmaku-panel {position:absolute;top:50px;right:0;width:min(280px,calc(100vw - 32px));box-sizing:border-box;padding:12px;background:#16191ff5;border:1px solid #ffffff40;border-radius:8px;box-shadow:0 8px 24px #0008;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y}
+.fnos-danmaku-panel[hidden] {display:none!important}
+.fnos-danmaku-panel label {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 12px;margin-bottom:12px;min-height:36px}
+.fnos-danmaku-panel output {color:#c6d2df;font-variant-numeric:tabular-nums}
+.fnos-danmaku-panel input[type="range"] {width:100%;height:28px;margin:0;accent-color:#91c4ff;touch-action:none}
+.fnos-danmaku-panel input[type="checkbox"] {width:20px;height:20px;accent-color:#91c4ff}
+.fnos-danmaku-panel select {min-height:36px;max-width:150px;background:#252b36;color:#fff;border:1px solid #ffffff40;border-radius:4px}
+.fnos-danmaku-panel>button {width:100%}
+.fnos-touch-player.fnos-landscape-rotated .art-layer-mobile-danmaku {top:6px;right:max(8px,env(safe-area-inset-bottom))}
+
+/* Idle state also suppresses the library hover class and application title overlays. */
+.art-video-player.fnos-desktop-idle .art-bottom,
+.art-video-player.fnos-desktop-idle .art-layer-title,
+.art-video-player.fnos-desktop-idle .art-layer-danmuTitle,
+.art-video-player.fnos-desktop-idle>.artplayer-plugin-danmuku {
+  opacity:0!important;visibility:hidden!important;pointer-events:none!important;
+}
+.art-video-player.fnos-desktop-idle {cursor:none!important}

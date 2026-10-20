@@ -1,7 +1,10 @@
 <script setup>
-import {getCurrentInstance, onMounted, ref, watch} from 'vue'
+import {computed, getCurrentInstance, onMounted, onBeforeUnmount, ref, watch} from 'vue'
 import VueCookies from 'vue-cookies';
 import {darkTheme} from "naive-ui";
+import PageBack from './components/PageBack.vue';
+import {isLibraryActive} from './navigation.js';
+import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from './theme.js';
 
 import {useMediaDbData} from './store.js'
 import {useRoute} from "vue-router";
@@ -12,16 +15,34 @@ const MediaDbData = useMediaDbData()
 const instance = getCurrentInstance();
 const COMMON = instance.appContext.config.globalProperties.$COMMON;
 let UserInfo = ref({})
+const avatarName = computed(() => String(UserInfo.value?.username || '').trim());
+const avatarInitial = computed(() => Array.from(avatarName.value)[0]?.toLocaleUpperCase() || 'U');
 let load = ref(true)
-let title = COMMON.title
+const title = ref(COMMON.title || 'FNOS TV');
 let collapsed = ref(false);
-const dark = ref(false);
-const theme = ref(null);
+const themePreference = ref(readThemePreference());
+const themeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+const systemDark = ref(themeMedia.matches);
+const dark = computed(() => isDarkTheme(themePreference.value, systemDark.value));
+const theme = computed(() => dark.value ? darkTheme : null);
+const themeOptions = [{label: '跟随系统', key: 'system'}, {label: '浅色模式', key: 'light'}, {label: '深色模式', key: 'dark'}];
+const themeLabel = computed(() => themeOptions.find(o => o.key === themePreference.value)?.label);
+function setThemePreference(mode) {
+  if (!themeModes.includes(mode)) return;
+  themePreference.value = mode;
+  try { localStorage.setItem('fnosThemeMode', mode); } catch {}
+}
+const onSystemTheme = event => { systemDark.value = event.matches; };
+themeMedia.addEventListener('change', onSystemTheme);
+watch([themePreference, systemDark], () => applyDocumentTheme(themePreference.value, systemDark.value), {immediate: true});
+onBeforeUnmount(() => themeMedia.removeEventListener('change', onSystemTheme));
 const data = ref(null)
 const MediaDbSum = ref({})
 const MediaDbInfo = ref({})
 const ConfigData = ref({})
 const route = useRoute();
+const pageLabel = computed(() => ({'/': '首页', '/list': data.value?.find(item => item.guid === route.query.gallery_uid)?.title || '媒体库', '/video': '影片详情', '/player': '正在播放'})[route.path] || '片库');
+const themeOverrides = computed(() => ({common: {primaryColor: dark.value ? '#83b0f1' : '#3978d4', primaryColorHover: dark.value ? '#a4c6f5' : '#4f88da', primaryColorPressed: dark.value ? '#6598dc' : '#2866bb', borderRadius: '8px'}}));
 const options = ref([
   {
     label: '注销登录',
@@ -32,12 +53,7 @@ const options = ref([
 if (COMMON.isMo) {
   collapsed.value = true;
 }
-const them = VueCookies.get("dark");
 const collapsedItem = VueCookies.get("collapsed");
-if (them === "true") {
-  dark.value = true;
-  theme.value = darkTheme;
-}
 if (collapsedItem === "true") {
   collapsed.value = true;
 }
@@ -66,7 +82,10 @@ async function getConfig() {
   let api = '/api/v1/sys/config'
   ConfigData.value = await COMMON.requests("GET", api);
   if (ConfigData.value !== undefined) {
-    localStorage.setItem("title", ConfigData.value.server_name)
+    if (ConfigData.value.server_name) {
+      title.value = ConfigData.value.server_name;
+      localStorage.setItem("title", title.value);
+    }
   }
 }
 
@@ -130,27 +149,13 @@ function toggDrawer() {
 }
 
 function Home() {
-  instance.$router.push({
+  instance.proxy.$router.push({
     path: "/",
   })
 }
 
 function toggDark() {
-  if (this.theme == null) {
-    this.theme = darkTheme;
-    VueCookies.set("dark", "true", 60 * 60 * 24 * 30);
-    this.dark = true;
-    return
-  }
-  if (this.theme.name === "dark") {
-    this.theme = null;
-    VueCookies.set("dark", "false", 60 * 60 * 24 * 30);
-    this.dark = false;
-  } else {
-    this.theme = darkTheme;
-    VueCookies.set("dark", "true", 60 * 60 * 24 * 30);
-    this.dark = true;
-  }
+  setThemePreference(dark.value ? 'light' : 'dark');
 }
 
 function handleSelect(key) {
@@ -191,7 +196,7 @@ async function onMountedFun() {
   await GetMediaDbInfos();
   // }
 
-  document.title = title;
+  document.title = title.value;
   load.value = false;
 }
 
@@ -214,11 +219,11 @@ watch(
 
 <template>
   <div v-if="load" class="load"></div>
-  <n-config-provider preflight-style-disabled=true :theme="theme" v-else>
+  <n-config-provider preflight-style-disabled=true :theme="theme" :theme-overrides="themeOverrides" v-else>
     <n-message-provider>
       <n-notification-provider>
         <n-dialog-provider>
-          <n-layout v-if="route.path !== '/login'" :class='[dark ? "dark" : "light", "home"]'>
+          <n-layout v-if="route.path !== '/login'" :class='[dark ? "dark" : "light", "home", {watching: route.path === "/player"}]'>
             <n-layout-header bordered>
               <div class="header-content">
                 <n-space>
@@ -227,48 +232,50 @@ watch(
                       <i class='bx bx-menu'></i>
                     </n-button>
                   </div>
-                  <div @click="Home" class="title">
-                    {{ title }}
+                  <div @click="Home" class="title brand-title">
+                    <span class="brand-mark"><i class="bx bxs-videos"></i></span>
+                    <span>{{ title }}</span>
                   </div>
+                  <span class="header-context">{{ pageLabel }}</span>
                 </n-space>
                 <n-space justify="end" class="header-right">
-                  <n-button quaternary @click="toggDark()" circle>
-                    <template #icon>
-                      <i v-if="dark" class='bx bx-sun'></i>
-                      <i v-else class='bx bx-moon'></i>
-                    </template>
-                  </n-button>
+                  <n-dropdown trigger="click" :options="themeOptions" @select="setThemePreference">
+                    <n-button quaternary round :title="'外观：' + themeLabel" aria-label="选择亮色或暗色模式">
+                      <template #icon><i class="bx" :class="themePreference === 'system' ? 'bx-desktop' : dark ? 'bx-moon' : 'bx-sun'"></i></template>
+                      <span class="theme-label">{{ themeLabel }}</span>
+                    </n-button>
+                  </n-dropdown>
 
                   <n-dropdown trigger="hover" placement="bottom-start" :options="options"
                               @select="handleSelect">
-                    <n-avatar circle size="medium" :style="{backgroundColor:'#468DF1'}">
-                      {{ UserInfo !== undefined ? UserInfo.username : '' }}
+                    <n-avatar circle size="medium" class="user-avatar" :title="avatarName" :aria-label="avatarName ? '用户：' + avatarName : '用户菜单'">
+                      {{ avatarInitial }}
                     </n-avatar>
                   </n-dropdown>
                 </n-space>
               </div>
             </n-layout-header>
-            <n-layout position="absolute" :style="{ top: '60px' }" has-sider>
+            <n-layout position="absolute" :style="{ top: '64px' }" has-sider>
               <n-layout-sider 
                 :collapsed="collapsed" 
                 collapse-mode="width" 
                 :collapsed-width="0" 
-                :width="240"
+                :width="216"
                 :native-scrollbar="false" 
                 bordered
                 :show-collapsed-content="false"
                 :class="{ 'mobile-sider': isMobile }"
               >
                 <div class="sider-item">
-                  <div class="sider-item-title">个人中心</div>
+                  <div class="sider-item-title">导航</div>
                   <div class="navigation">
                     <ul class="nav-links">
                       <li>
-                        <router-link to="/">
+                        <router-link to="/" @click="isMobile && (collapsed = true)">
                                                     <span class="icon">
                                                         <i class='bx bx-home'></i>
                                                     </span>
-                          <span class="title">主页</span>
+                          <span class="title">首页</span>
                         </router-link>
                       </li>
                       <!--                      <li>-->
@@ -289,7 +296,7 @@ watch(
                     <ul class="nav-links">
                       <li v-for="(item, index) in data" :key="index">
                         <div v-if="item.category !== 'Others'">
-                          <router-link :to="{
+                          <router-link @click="isMobile && (collapsed = true)" active-class="" exact-active-class="" :class="{'library-active': isLibraryActive(route, item.guid)}" :to="{
                                                     path: '/list', query: {
                                                         gallery_uid: item.guid,
                                                         gallery_type: item.category
@@ -302,8 +309,7 @@ watch(
                                                         <i class='bx bx-desktop'></i>
                                                     </span>
                             <span :data-id="item.gallery_uid" class="title">{{ item.title }}</span>
-                            <span class="title"
-                                  style="position: absolute;right: 1em;font-size: 1em;">{{
+                            <span class="library-count">{{
                                 MediaDbSum[item.guid]
                               }}</span>
                           </router-link>
@@ -314,6 +320,7 @@ watch(
                 </div>
               </n-layout-sider>
               <n-layout :native-scrollbar="false" :class="{ 'mobile-content': isMobile }">
+                <PageBack v-if="route.path === '/list'" />
                 <router-view/>
               </n-layout>
             </n-layout>

@@ -1,15 +1,26 @@
 <script setup>
+import {continuePlaybackRoute} from './Play/player-presentation.js';
 import {useMediaDbData} from '../store'
-import {getCurrentInstance, onMounted, ref, onUnmounted, h} from "vue";
+import {getCurrentInstance, onMounted, ref, onUnmounted, computed, h} from "vue";
 import {useMessage, NIcon, NProgress} from 'naive-ui'
 
 const MediaDbData = useMediaDbData()
 const message = useMessage()
-const per_view = ref(window.innerWidth <= 768 ? 2 : 5);
-const per_card = ref(window.innerWidth <= 768 ? 3 : 8);
+const per_view = ref(window.innerWidth <= 768 ? 2 : 4);
+const per_card = ref(window.innerWidth <= 768 ? 3 : 7);
 const instance = getCurrentInstance();
 const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
+const keyword = ref('');
+const visibleLibraries = computed(() => (MediaDbData.list || []).filter(item => item.category !== 'Others'));
+const libraryInfo = key => (MediaDbData.list || []).find(item => item.guid === key);
+const libraryRoute = item => ({path: '/list', query: {gallery_uid: item.guid, gallery_type: item.category}});
+
+function filteredItems(key) {
+  const needle = keyword.value.trim().toLowerCase();
+  return (MediaDbData.info[key]?.list || []).filter(item => !needle || (item.title || item.name || '').toLowerCase().includes(needle));
+}
+const hasSearchResults = computed(() => Object.keys(MediaDbData.info).some(key => filteredItems(key).length));
 const playList = ref(null)
 const play_item_guid = ref(null);
 const EpisodeCarouselRef = ref(null);
@@ -54,13 +65,7 @@ const handleDropdownSelect = async (key) => {
   switch (key) {
     case 'continue':
       // 跳转到播放页面
-      proxy.$router.push({
-        path: '/player',
-        query: {
-          gallery_type: item.type,
-          guid: item.parent_guid ?? item.guid
-        }
-      })
+      proxy.$router.push(continuePlaybackRoute(item))
       break
     case 'remove':
       try {
@@ -86,8 +91,8 @@ const handleClickOutside = () => {
 
 // 监听窗口大小变化
 window.addEventListener('resize', () => {
-  per_view.value = window.innerWidth <= 768 ? 2 : 5;
-  per_card.value = window.innerWidth <= 768 ? 3 : 8;
+  per_view.value = window.innerWidth <= 768 ? 2 : 4;
+  per_card.value = window.innerWidth <= 768 ? 3 : 7;
 });
 
 async function GetPlayList() {
@@ -120,123 +125,46 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="content">
-    <div class="card-list">
-      <div class="card-shows" v-if="playList && playList.length > 0">
-        <div class="card-show-title">
-          继续观看
-        </div>
-        <div class="carousel-container">
-          <n-carousel :show-dots="false" :slides-per-view="per_view" :space-between="20" ref="EpisodeCarouselRef"
-                      :loop="false" draggable>
-            <div class="view-item" v-for="(item, index) in playList" :key="item.guid"
-                 @mouseenter="play_item_guid = item.guid"
-                 @mouseleave="play_item_guid = null"
-                 @contextmenu="handleContextMenu($event, item)">
-              <div>
-                <router-link :to="{
-                    path: '/player', query: {
-                        gallery_type: item.type,
-                        guid: item.parent_guid??item.guid
-                    }
-                }">
-                  <img v-if="item.poster.length > 0" loading="lazy" class='gallery-img'
-                       v-lazy='COMMON.imgUrl + item.poster' style="border-radius:10px">
-                  <img v-else loading="lazy" class='gallery-img' v-lazy="'/images/not_gellery.png'">
-                  <!-- 进度条：仅当duration和ts存在且duration>0时显示 -->
-                  <n-progress
-                    v-if="item.duration && item.ts && item.duration > 0"
-                    type="line"
-                    :percentage="Math.min(100, Math.floor(item.ts / item.duration * 100))"
-                    :height="3"
-                    :show-indicator="false"
-                    style="margin-top: 1px; border-radius: 2px;"
-                  />
-                  <!-- 播放图标 (仅在 hover 时显示) -->
-                  <div v-if="play_item_guid === item.guid" class="play-icon">
-                    <i class="bx bx-play"></i>
-                  </div>
-                  <div class="view-item-title">
-                    {{ item.type === 'Episode' ? item.tv_title : item.title }}
-                  </div>
-                  <div v-if="item.type === 'Episode'" class="view-item-title"
-                       style="font-size: 0.8em;color:rgba(0, 0, 0, 0.4);">
-                    第 {{ item.season_number }} 季·第 {{ item.episode_number }} 集
-                  </div>
-                  <div v-else class="view-item-title" style="font-size: 0.8em;color:rgba(0, 0, 0, 0.4);">
-                    电影
-                  </div>
-                </router-link>
-              </div>
-            </div>
-          </n-carousel>
-          <!-- 左箭头 -->
-          <button class="carousel-arrow left" @click="goPrev">‹</button>
-
-          <!-- 右箭头 -->
-          <button class="carousel-arrow right" @click="goNext">›</button>
-        </div>
-      </div>
-      <div class="card-shows" v-for="(key, index) in Object.keys(MediaDbData.info)" :key="index">
-        <div v-if="MediaDbData.list.find((item) => item.guid === key).category !== 'Others'">
-          <div class="card-show-title">
-            {{ MediaDbData.list.find((item) => item.guid === key).title }}
-          </div>
-          <div class="card-show-content view-card">
-            <n-carousel :show-dots="false" show-arrow :slides-per-view="per_card" :space-between="20" :loop="false"
-                        draggable>
-              <div class="view-item" v-for="item in MediaDbData.info[key].list" :key="item.id">
-                <div class="view-item-header">
-                  <div class="view-item-tag-list">
-                    <div class="view-item-tag rating">
-                      {{
-                        isNaN(Math.floor(item.vote_average * 100) /
-                            100) ? "" : Math.floor(item.vote_average * 100) / 100
-                      }}
-                    </div>
-                    <!-- <div v-if="item.Type != 'Movie' && item.ChildCount != 0" class="view-item-tag count">
-                        {{ item.ChildCount }}
-                    </div> -->
-                    <!--                  <p>{{ item }}</p>-->
-                    <div v-if="item.played" class="view-item-tag count">
-                      <i class='bx bx-check'></i>
-                    </div>
-                  </div>
-                </div>
-                <router-link :to="{
-                                path: '/video', query: {
-                                    guid: item.guid,
-                                    gallery_type: item.type
-                                }
-                            }">
-                  <img v-if="item.poster !== undefined" loading="lazy" class="carousel-img"
-                       v-lazy='COMMON.imgUrl +  "/92/17/"+item.poster + "?w=200"'>
-                  <img v-else loading="lazy" class='carousel-img' v-lazy="'/images/not_video.jpg'">
-                </router-link>
-                <div v-if="item.title != null" class="view-item-title">
-                  {{ item.title }}
-                </div>
-                <div v-else class="view-item-title">
-                  {{ item.name }}
-                </div>
-              </div>
-              <template #arrow="{ prev, next }">
-                <div class="custom-arrow">
-                  <button type="button" class="custom-arrow--left" @click="prev">
-                    <i class='bx bx-chevron-left'></i>
-                  </button>
-                  <button type="button" class="custom-arrow--right" @click="next">
-                    <i class='bx bx-chevron-right'></i>
-                  </button>
-                </div>
-              </template>
-            </n-carousel>
-          </div>
-        </div>
-      </div>
+  <div class="content cinema-home">
+    <div class="library-toolbar">
+      <div><h1>首页</h1><p class="page-description">继续观看与媒体库</p></div>
+      <n-input v-model:value="keyword" class="catalog-search" clearable placeholder="搜索已载入影片" aria-label="搜索已载入影片">
+        <template #prefix><i class="bx bx-search"></i></template>
+      </n-input>
     </div>
-
-    <!-- 右键菜单 -->
+    <nav class="library-shortcuts" aria-label="媒体库">
+      <router-link v-for="item in visibleLibraries" :key="item.guid" :to="libraryRoute(item)" class="library-shortcut">
+        <i class="bx" :class="item.category === 'Movie' ? 'bx-film' : 'bx-tv'"></i><span>{{ item.title }}</span><i class="bx bx-chevron-right"></i>
+      </router-link>
+    </nav>
+    <n-empty v-if="keyword && !hasSearchResults" description="没有找到匹配的已载入影片" class="catalog-empty" />
+    <section class="card-shows continue-section" v-if="playList?.length && !keyword">
+      <div class="section-heading"><h2>继续观看</h2></div>
+      <n-carousel :show-dots="false" show-arrow :slides-per-view="per_view" :space-between="18" ref="EpisodeCarouselRef" :loop="false" draggable>
+        <div class="continue-card" v-for="item in playList" :key="item.guid" @contextmenu="handleContextMenu($event, item)">
+          <router-link :to="continuePlaybackRoute(item)">
+            <div class="continue-art"><img v-lazy="item.poster ? COMMON.imgUrl + item.poster : '/images/not_gellery.png'" :alt="item.tv_title || item.title" loading="lazy"><span class="poster-play"><i class="bx bx-play"></i></span>
+              <div class="continue-progress" v-if="item.duration > 0"><span :style="{width: Math.min(100, Math.max(0, Number(item.ts || 0) / item.duration * 100)) + '%'}"></span></div>
+            </div>
+            <div class="view-item-title">{{ item.type === 'Episode' ? item.tv_title : item.title }}</div>
+            <div class="poster-caption">{{ item.type === 'Episode' ? `第 ${item.season_number} 季 · 第 ${item.episode_number} 集` : '电影' }}</div>
+          </router-link>
+        </div>
+      </n-carousel>
+    </section>
+    <template v-for="key in Object.keys(MediaDbData.info)" :key="key">
+      <section class="card-shows" v-if="libraryInfo(key)?.category !== 'Others' && filteredItems(key).length">
+        <div class="section-heading"><h2>{{ libraryInfo(key)?.title || '媒体库' }}</h2><router-link v-if="libraryInfo(key)" :to="libraryRoute(libraryInfo(key))" class="section-more">查看全部 <i class="bx bx-chevron-right"></i></router-link></div>
+        <n-carousel :show-dots="false" show-arrow :slides-per-view="per_card" :space-between="18" :loop="false" draggable>
+          <div class="view-item poster-card" v-for="item in filteredItems(key)" :key="item.guid">
+            <router-link :to="{path: '/video', query: {guid: item.guid, gallery_type: item.type}}">
+              <div class="poster-art"><img v-lazy="item.poster ? COMMON.imgUrl + '/92/17/' + item.poster + '?w=300' : '/images/not_video.jpg'" :alt="item.title || item.name" loading="lazy"><span class="poster-play"><i class="bx bx-play"></i></span><span v-if="item.vote_average > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="item.played" class="poster-watched"><i class="bx bx-check"></i></span></div>
+              <div class="view-item-title">{{ item.title || item.name }}</div><div class="poster-caption" v-if="item.release_date">{{ String(item.release_date).slice(0, 4) }}</div>
+            </router-link>
+          </div>
+        </n-carousel>
+      </section>
+    </template>
     <n-dropdown
         :show="showDropdown"
         :options="dropdownOptions"
@@ -248,347 +176,3 @@ onUnmounted(() => {
     />
   </div>
 </template>
-
-<!-- Add "scoped" attribute to limit CSS to this component only -->
-<style scoped>
-.movie-container {
-  display: flex; /* 使用 Flexbox 排列 */
-  justify-content: center; /* 居中对齐 */
-  gap: 2px; /* 卡片之间的间距 */
-  padding: 1px; /* 容器的内边距 */
-  border-radius: 10px; /* 容器的圆角 */
-  overflow-x: auto; /* 当内容超出时允许横向滚动 */
-  backdrop-filter: blur(10px); /* 毛玻璃模糊效果 */
-  -webkit-backdrop-filter: blur(10px); /* 兼容 Safari 浏览器 */
-  background-color: rgba(255, 255, 255, 0.1); /* 半透明背景色 */
-  border: 1px solid rgba(255, 255, 255, 0.2); /* 淡色边框 */
-}
-
-/* 单个卡片样式 */
-.movie-card {
-  text-align: center; /* 文字居中 */
-  width: 150px; /* 卡片宽度 */
-}
-
-/* 图片样式 */
-.movie-poster {
-  width: 100%; /* 图片宽度占满卡片 */
-  height: auto; /* 高度自适应 */
-  border-radius: 10px; /* 图片的圆角 */
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); /* 添加阴影效果 */
-  transition: transform 0.3s; /* 添加平滑缩放动画 */
-}
-
-
-.card-show-title {
-  font-size: 1.2em;
-  font-weight: 400;
-  padding-bottom: 16px;
-}
-
-.card-shows {
-  margin-bottom: 20px;
-}
-
-.view-item {
-  text-align: center;
-  cursor: context-menu; /* 添加右键菜单光标样式 */
-}
-
-.gallery-card .view-item {
-  transform: translateY(0) scale(1);
-  transition: all .2s ease-in-out;
-}
-
-.gallery-card .view-item:hover {
-  transform: translateY(0) scale(0.99);
-  transition: all .2s ease-in-out;
-}
-
-.gallery-card .view-item img {
-  border-radius: 5px;
-}
-
-.medias .view-item-title {
-  font-size: 1.2em;
-  font-weight: 400;
-}
-
-.custom-arrow {
-  display: flex;
-  position: absolute;
-  top: 70%;
-  right: 10px;
-}
-
-@media (max-width: 750px) {
-  .custom-arrow {
-    display: none;
-  }
-}
-
-.view-card .custom-arrow {
-  top: 75%;
-}
-
-.custom-arrow button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  margin-right: 12px;
-  color: #fff;
-  background-color: rgba(255, 255, 255, 0.1);
-  border-width: 0;
-  border-radius: 8px;
-  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  cursor: pointer;
-}
-
-.custom-arrow button:hover {
-  background-color: rgba(255, 255, 255, 0.2);
-}
-
-.custom-arrow button:active {
-  transform: scale(0.95);
-  transform-origin: center;
-}
-
-img.carousel-img {
-  width: 100%;
-  aspect-ratio: 16/10;
-}
-
-.view-card img.carousel-img {
-  width: 100%;
-  aspect-ratio: 11/16;
-  border-radius: 5px;
-}
-
-
-.view-card .view-item {
-  transform: translateY(0) scale(1);
-  transition: all .2s ease-in-out;
-}
-
-.view-card .view-item:hover {
-  transform: translateY(-4px) scale(0.95);
-  transition: all .2s ease-in-out;
-}
-
-.view-item-header {
-  position: absolute;
-  width: 95%;
-  padding-left: 4px;
-}
-
-.view-item-tag-list {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.view-item-tag-list .count {
-  background-color: #2d8cf0 !important;
-  border-radius: 50%;
-  width: 20px;
-  height: 20px;
-  color: white;
-  padding: 4px;
-  text-align: center;
-}
-
-.rating {
-  color: yellow;
-}
-
-.project {
-  margin-top: 10px;
-}
-
-.project .n-pagination {
-  float: right;
-}
-
-@media (max-width: 767px) {
-  .card-show-title {
-    font-size: 1.2em;
-    font-weight: 400;
-    padding-bottom: 10px;
-  }
-
-  .view-item-title {
-    font-size: 0.5em;
-    font-weight: 400;
-  }
-
-  .custom-arrow.next {
-    bottom: 60px;
-  }
-}
-
-
-/* 轮播容器，确保箭头在正确位置 */
-.carousel-container {
-  position: relative;
-  width: 100%;
-}
-
-
-/* 左右箭头按钮 */
-.carousel-arrow {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  background: rgba(0, 0, 0, 0.5);
-  color: white;
-  border: none;
-  font-size: 24px;
-  padding: 10px 15px;
-  cursor: pointer;
-  z-index: 10;
-  border-radius: 50%;
-  transition: background 0.3s ease;
-}
-
-.carousel-arrow:hover {
-  background: rgba(0, 0, 0, 0.8);
-}
-
-/* 左箭头位置 */
-.carousel-arrow.left {
-  left: 5px;
-}
-
-/* 右箭头位置 */
-.carousel-arrow.right {
-  right: 5px;
-}
-
-/* 鼠标悬浮时放大 */
-.view-item:hover .gallery-img {
-  transform: scale(1.05);
-  border-radius: 10px !important;
-}
-
-/* 播放按钮 */
-.play-icon {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 40px;
-  color: white;
-  background: rgba(0, 0, 0, 0.6);
-  width: 60px;
-  height: 60px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  transition: background 0.3s ease;
-  cursor: pointer;
-}
-
-/* 悬浮时背景变亮 */
-.play-icon:hover {
-  background: rgba(0, 0, 0, 0.8);
-}
-
-/* 移动端适配样式 */
-@media (max-width: 768px) {
-  .card-show-title {
-    font-size: 1.1em;
-    padding-bottom: 12px;
-  }
-
-  .view-item-title {
-    font-size: 0.9em;
-    margin-top: 4px;
-  }
-
-  .carousel-container {
-    margin: 0 -10px;
-  }
-
-  .carousel-arrow {
-    padding: 8px 12px;
-    font-size: 20px;
-  }
-
-  .play-icon {
-    width: 40px;
-    height: 40px;
-    font-size: 24px;
-  }
-
-  .view-item-tag {
-    font-size: 0.8em;
-    padding: 2px 6px;
-  }
-
-  .view-item-tag-list .count {
-    width: 16px;
-    height: 16px;
-    padding: 2px;
-  }
-
-  .custom-arrow button {
-    width: 24px;
-    height: 24px;
-    margin-right: 8px;
-  }
-
-  /* 调整图片容器间距 */
-  .card-shows {
-    margin-bottom: 16px;
-    padding: 0 10px;
-  }
-
-  /* 优化卡片间距 */
-  .n-carousel {
-    margin: 0 -5px;
-  }
-
-  .view-item {
-    padding: 0 5px;
-  }
-
-  /* 调整图片比例 */
-  img.carousel-img {
-    aspect-ratio: 2/3;
-  }
-
-  .gallery-img {
-    aspect-ratio: 16/9;
-  }
-}
-
-/* 小屏幕手机适配 */
-@media (max-width: 480px) {
-  .card-show-title {
-    font-size: 1em;
-  }
-
-  .view-item-title {
-    font-size: 0.8em;
-  }
-
-  .carousel-arrow {
-    padding: 6px 10px;
-    font-size: 18px;
-  }
-
-  .play-icon {
-    width: 36px;
-    height: 36px;
-    font-size: 20px;
-  }
-}
-
-.gallery-img {
-  border-radius: 10px !important;
-  transition: transform 0.3s;
-}
-</style>

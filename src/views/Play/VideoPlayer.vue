@@ -1,23 +1,33 @@
 <script setup>
 import flvjs from 'flv.js';
 import Hls from 'hls.js';
-import {getCurrentInstance, onBeforeUnmount, onMounted, ref} from "vue";
+import {computed, getCurrentInstance, onBeforeUnmount, onMounted, ref, watch} from "vue";
 
 import Artplayer from "./ArtPlayer.vue";
 import {onBeforeRouteLeave, onBeforeRouteUpdate} from "vue-router";
 import VueCookies from "vue-cookies";
-import {usePlayerData} from "@/store.js";
 import sortedIndexBy from 'lodash-es/sortedIndexBy'
 import artplayerPluginDanmuku from "artplayer-plugin-danmuku";
 import axios from "axios";
-import {createBlobVTTUrl, M3U8SubtitlePlugin} from "./subtitle.js"
+import {createBlobVTTUrl, SegmentedSubtitleLoader, subtitleOptions, bindSubtitleTrack, subtitleSearchResults, downloadSubtitle, isPgsSubtitle, streamSubtitleGuid} from "./subtitle.js"
+import {episodeDanmaku, errorText} from '../../compat.js';
+import {SubtitleOverlay, waitForAssSubtitle} from './ass-renderer.js';
+import {playbackTitle, playbackSelection} from './player-presentation.js';
+import {installMobileFullscreen} from './mobile-fullscreen.js';
+import {installMobileDanmaku} from './mobile-danmaku.js';
+import {installDesktopIdle} from './desktop-idle.js';
+let disposeDesktopIdle = () => {};
+import {externalPlayerLink, externalPlaylist} from './external-player.js';
+import {replaceMediaEngine, releaseMediaEngine} from './media-lifecycle.js';
+let disposeMobileDanmaku = () => {};
+const touchPlayer = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.matchMedia('(pointer: coarse)').matches);
+let disposeMobileFullscreen = () => {};
 
 const instance = getCurrentInstance();
 const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
 const device = proxy.$device;
 
-const PlayerData = usePlayerData()
 let art = null;
 const guid = ref(null);
 const episode_guid = ref(null);
@@ -26,7 +36,85 @@ const EpisodeList = ref(null);
 const StreamList = ref(null);
 const QualityData = ref(null);
 const playInfo = ref(null);
+async function backFromPlayer() {
+  art?.pause();
+  if (art?.fullscreen) art.fullscreen = false;
+  if (art?.fullscreenWeb) art.fullscreenWeb = false;
+  const previous = window.history.state?.back;
+  if (typeof previous === 'string' && previous.startsWith('/') && !previous.startsWith('//') && !/^\/(player|login)(?:[/?#]|$)/.test(previous)) {
+    proxy.$router.back();
+  } else if (guid.value) {
+    await proxy.$router.replace({path: '/video', query: {guid: guid.value, gallery_type: gallery_type.value}});
+  } else {
+    await proxy.$router.replace('/');
+  }
+}
+let playerHeading = null;
+function createPlayerHeading() {
+  if (playerHeading) {
+    playerHeading.querySelector('.art-title').textContent = playbackTitle(playInfo.value, gallery_type.value);
+    return playerHeading;
+  }
+  const heading = document.createElement('div');
+  heading.className = 'art-player-heading';
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'art-back-button';
+  back.setAttribute('aria-label', '返回上一页');
+  back.title = '返回';
+  back.textContent = '‹ 返回';
+  back.addEventListener('click', event => {event.stopPropagation(); void backFromPlayer();});
+  const title = document.createElement('span');
+  title.className = 'art-title';
+  title.textContent = playbackTitle(playInfo.value, gallery_type.value);
+  heading.append(back, title);
+  playerHeading = heading;
+  return heading;
+}
+
 const showModal = ref(false);
+const externalMediaUrl = ref('');
+const externalBusy = ref(false);
+const externalError = ref('');
+const externalPlaylistUrl = ref('');
+function releaseExternalPlaylist() {
+  if (externalPlaylistUrl.value) URL.revokeObjectURL(externalPlaylistUrl.value);
+  externalPlaylistUrl.value = '';
+}
+watch(externalMediaUrl, value => {
+  releaseExternalPlaylist();
+  if (value) externalPlaylistUrl.value = URL.createObjectURL(new Blob([externalPlaylist(value, playInfo.value?.title)], {type: 'audio/x-mpegurl'}));
+});
+watch(showModal, visible => { if (!visible) externalMediaUrl.value = ''; });
+const externalHref = player => externalPlayerLink(player, externalMediaUrl.value, navigator.userAgent);
+async function openExternalPlayback() {
+  if (externalBusy.value) return;
+  art?.pause();
+  if (art?.fullscreen) art.fullscreen = false;
+  if (art?.fullscreenWeb) art.fullscreenWeb = false;
+  showModal.value = true;
+  externalMediaUrl.value = '';
+  externalError.value = '';
+  externalBusy.value = true;
+  const episode = episode_guid.value;
+  try {
+    if (use_302_play.value && url.value !== COMMON.fnHost + urlBase.value) {
+      const direct = new URL(playUrl.value, window.location.origin);
+      if (!['http:', 'https:'].includes(direct.protocol)) throw new Error('无效的媒体地址');
+      externalMediaUrl.value = direct.href;
+      return;
+    }
+    const response = await axios.post('/danmu/external-play', {play_link: urlBase.value}, {
+      headers: {Authorization: VueCookies.get('authorization') || ''}
+    });
+    if (episode !== episode_guid.value || !showModal.value) return;
+    if (response.data?.code !== 0 || !response.data.data?.url) throw new Error(response.data?.msg || '外部播放链接获取失败');
+    externalMediaUrl.value = new URL(response.data.data.url, window.location.origin).href;
+  } catch (error) {
+    externalError.value = error.response?.data?.msg || errorText(error);
+  } finally { externalBusy.value = false; }
+}
+
 const loading = ref(true);
 const urlBase = ref(null);
 const url = ref(null);
@@ -37,10 +125,260 @@ const showSetUp = ref(false)
 const timerSendPlayRecord = ref(null);
 const emojos = ref(null);
 const allDanmaku = ref({})
+const showDanmakuSearch = ref(false);
+const danmakuKeyword = ref('');
+const danmakuSearchSource = ref('360');
+const danmakuResults = ref([]);
+const danmakuEpisodes = ref([]);
+const danmakuSelectedEpisode = ref(null);
+const danmakuSelectedSource = ref(null);
+const danmakuBusy = ref(false);
+const danmakuSearchDone = ref(false);
+const danmakuSearchError = ref('');
+let danmakuLoadGeneration = 0;
+let lastDanmuLoadedUntil = -1;
+const danmakuEpisodeOptions = computed(() => danmakuEpisodes.value.map((e, index) => ({
+  value: index, label: `${e.number ? `第 ${e.number} 集 · ` : ''}${e.title}`
+})));
+async function danmakuRequest(path, options = {}) {
+  const response = await fetch(path, {...options, headers: {
+    Authorization: VueCookies.get('authorization') || '',
+    ...(options.body ? {'Content-Type': 'application/json'} : {})
+  }});
+  const data = await response.json();
+  if (!response.ok || (data?.code !== undefined && data.code !== 0))
+    throw new Error(data?.msg || `弹幕服务返回 HTTP ${response.status}`);
+  return data;
+}
+function openDanmakuSearch() {
+  art?.pause();
+  if (art) art.setting.show = false;
+  if (art?.fullscreen) art.fullscreen = false;
+  if (art?.fullscreenWeb) art.fullscreenWeb = false;
+  danmakuKeyword.value = playInfo.value?.tv_title || playInfo.value?.title || '';
+  showDanmakuSearch.value = true;
+}
+async function searchDanmaku() {
+  if (danmakuBusy.value) return;
+  const episodeGuid = episode_guid.value;
+  danmakuBusy.value = true;
+  danmakuSearchError.value = '';
+  danmakuSearchDone.value = false;
+  danmakuEpisodes.value = [];
+  danmakuSelectedSource.value = null;
+  try {
+    const data = await danmakuRequest('/danmu/search?' + new URLSearchParams({
+      keyword: danmakuKeyword.value.trim(), source: danmakuSearchSource.value
+    }));
+    if (episodeGuid !== episode_guid.value) return;
+    danmakuResults.value = data.results || [];
+    danmakuSearchDone.value = true;
+  } catch (error) { if (episodeGuid === episode_guid.value) danmakuSearchError.value = errorText(error); }
+  finally { danmakuBusy.value = false; }
+}
+async function chooseDanmakuSource(source) {
+  if (danmakuBusy.value) return;
+  const episodeGuid = episode_guid.value;
+  danmakuBusy.value = true;
+  danmakuSearchError.value = '';
+  danmakuEpisodes.value = [];
+  danmakuSelectedSource.value = source;
+  try {
+    const data = await danmakuRequest('/danmu/episodes?' + new URLSearchParams({url: source.url}));
+    if (episodeGuid !== episode_guid.value) return;
+    danmakuEpisodes.value = data.episodes || [];
+    const matched = danmakuEpisodes.value.findIndex(e => String(e.number) === String(playInfo.value.episode_number ?? 1));
+    danmakuSelectedEpisode.value = matched < 0 ? 0 : matched;
+  } catch (error) { if (episodeGuid === episode_guid.value) danmakuSearchError.value = errorText(error); }
+  finally { danmakuBusy.value = false; }
+}
+async function applyDanmakuRows(rows, episodeNumber) {
+  // load() 不带参数会清空旧队列；带数组则是追加，不能用 load([]) 清空。
+  const plugin = art.plugins.artplayerPluginDanmuku;
+  plugin.config({danmuku: []});
+  await plugin.load();
+  allDanmaku.value = {[String(episodeNumber)]: [...rows].sort((a, b) => a.time - b.time)};
+  danmuConfig.value.loadedUntil = Math.max(0, (art.currentTime || 0) - 1);
+  lastDanmuLoadedUntil = -1;
+  danmuTitleData.value.html = rows.length ? `弹幕加载完成，${rows.length}条数据` : '未匹配到本集弹幕，可点击“搜索弹幕”手动选择';
+  art.layers.update(danmuTitleData.value);
+}
+async function useDanmakuEpisode() {
+  const selected = danmakuEpisodes.value[danmakuSelectedEpisode.value];
+  if (!selected || danmakuBusy.value) return;
+  const episodeGuid = episode_guid.value;
+  const parentGuid = guid.value;
+  const episodeNumber = playInfo.value.episode_number ?? 1;
+  danmakuBusy.value = true;
+  danmakuSearchError.value = '';
+  const generation = ++danmakuLoadGeneration;
+  try {
+    const json = await danmakuRequest('/danmu/get?' + new URLSearchParams({url: selected.url}));
+    if (episodeGuid !== episode_guid.value || generation !== danmakuLoadGeneration) return;
+    const rows = episodeDanmaku(json, episodeNumber);
+    if (!rows.length) throw new Error('这个播放链接未返回弹幕，请选择其他平台或集数');
+    await danmakuRequest('/danmu/select', {method: 'POST', body: JSON.stringify({
+      guid: episodeGuid, parent_guid: parentGuid, url: selected.url
+    })});
+    if (episodeGuid !== episode_guid.value || generation !== danmakuLoadGeneration) return;
+    await applyDanmakuRows(rows, episodeNumber);
+    await getVideoConfig();
+    void GetEmoji();
+    COMMON.ShowMsg(`当前集来源已保存，加载 ${rows.length} 条弹幕`);
+  } catch (error) { if (episodeGuid === episode_guid.value) danmakuSearchError.value = errorText(error); }
+  finally { danmakuBusy.value = false; }
+}
 const currentSubtitle = ref(null);
+let serverSubtitleGuid = null;
+let subtitleSwitchGeneration = 0;
+const useAssSubtitles = ref(localStorage.getItem('fnosAssSubtitles') !== 'false');
+const subtitleRenderMode = ref('text');
+const assRenderer = new SubtitleOverlay({onFailure: error => {
+  COMMON.ShowMsg(errorText(error) + '，正在切换普通字幕');
+  void switchSubtitleUrl({plain: true}).catch(showSubtitleError);
+}});
+const pgsRenderer = new SubtitleOverlay({kind: 'pgs', onFailure: showSubtitleError});
+const showSubtitleSearch = ref(false);
+const subtitleSearchBusy = ref(false);
+const subtitleDownloadBusy = ref(false);
+const subtitleSearchDone = ref(false);
+const subtitleSearchError = ref('');
+const subtitlePlaybackError = ref('');
+const subtitleSearchLanguage = ref('zh-CN');
+const subtitleSearchLanguages = ref([{label: '中文', value: 'zh-CN'}, {label: 'English', value: 'en'}]);
+const subtitleSearchFilter = ref('');
+const subtitleResults = ref([]);
+const subtitleTrackGuid = ref(null);
+let subtitleSearchGeneration = 0;
+const filteredSubtitleResults = computed(() => subtitleResults.value.filter(s =>
+  s.filename.toLowerCase().includes(subtitleSearchFilter.value.trim().toLowerCase())));
+const subtitleTrackChoices = computed(() => subtitleOptions(StreamList.value?.subtitle_streams, currentSubtitle.value?.guid)
+  .map(s => ({label: s.html, value: s.guid || ''})));
+function subtitleMediaGuid() {
+  return StreamList.value?.video_streams?.[0]?.media_guid || StreamList.value?.files?.[0]?.guid;
+}
+async function openSubtitleSearch() {
+  art?.pause();
+  if (art) art.setting.show = false;
+  // 模态框挂在页面上，退出浏览器原生全屏后仍可操作。
+  if (art?.fullscreen) art.fullscreen = false;
+  if (art?.fullscreenWeb) art.fullscreenWeb = false;
+  subtitleTrackGuid.value = currentSubtitle.value?.guid || '';
+  showSubtitleSearch.value = true;
+  try {
+    const config = await COMMON.requests('GET', '/api/v1/sys/config');
+    if (Array.isArray(config?.supported_languages) && config.supported_languages.length) {
+      subtitleSearchLanguages.value = config.supported_languages.map(value => ({value,
+        label: ({'zh-CN': '中文', en: 'English'})[value] || value}));
+      if (!config.supported_languages.includes(subtitleSearchLanguage.value))
+        subtitleSearchLanguage.value = config.default_language || config.supported_languages[0];
+    }
+  } catch { /* 使用已知默认语言仍可查询 */ }
+}
+async function searchSubtitles() {
+  const mediaGuid = subtitleMediaGuid();
+  if (!mediaGuid || subtitleSearchBusy.value) return;
+  const generation = ++subtitleSearchGeneration;
+  subtitleSearchBusy.value = true;
+  subtitleSearchError.value = '';
+  subtitleSearchDone.value = false;
+  subtitleResults.value = [];
+  try {
+    const data = await COMMON.requests('POST', '/api/v1/subtitle/search', true, {
+      lan: subtitleSearchLanguage.value, media_guid: mediaGuid
+    });
+    if (generation !== subtitleSearchGeneration || mediaGuid !== subtitleMediaGuid()) return;
+    subtitleResults.value = subtitleSearchResults(data, StreamList.value?.subtitle_streams);
+    subtitleSearchDone.value = true;
+  } catch (error) {
+    if (generation === subtitleSearchGeneration) subtitleSearchError.value = errorText(error);
+  } finally {
+    if (generation === subtitleSearchGeneration) subtitleSearchBusy.value = false;
+  }
+}
+async function useSearchedSubtitle(result) {
+  if (subtitleDownloadBusy.value) return;
+  const mediaGuid = subtitleMediaGuid();
+  subtitleDownloadBusy.value = true;
+  subtitleSearchError.value = '';
+  try {
+    let stream = StreamList.value?.subtitle_streams?.find(s => s.guid === result.existingGuid);
+    if (!stream) stream = await downloadSubtitle(COMMON.requests, mediaGuid, result);
+    if (mediaGuid !== subtitleMediaGuid()) return;
+    stream = {...stream, trim_id: stream.trim_id || result.trimId};
+    const existing = StreamList.value.subtitle_streams || [];
+    StreamList.value.subtitle_streams = [...existing.filter(s => s.guid !== stream.guid), stream];
+    subtitleResults.value = subtitleSearchResults({subtitles: subtitleResults.value}, StreamList.value.subtitle_streams);
+    subtitleTrackGuid.value = stream.guid;
+    await switchSubtitle({...stream, html: result.filename, forceReload: true});
+    if (!subtitlePlaybackError.value) COMMON.ShowMsg('字幕已添加并选择，请继续播放');
+  } catch (error) { subtitleSearchError.value = errorText(error); }
+  finally { subtitleDownloadBusy.value = false; }
+}
+async function reloadSelectedSubtitle() {
+  const selected = StreamList.value?.subtitle_streams?.find(s => s.guid === subtitleTrackGuid.value);
+  await switchSubtitle(selected ? {...selected, html: selected.title || '字幕', forceReload: true}
+    : {guid: null, index: -1, html: '关闭字幕'});
+}
+const subtitleFontSizeKey = 'fnosSubtitleFontSize';
+function savedSubtitleFontSize() {
+  try {
+    const saved = localStorage.getItem(subtitleFontSizeKey);
+    const value = Number(saved);
+    return saved && Number.isFinite(value) ? Math.min(60, Math.max(12, Math.round(value))) : 20;
+  } catch { return 20; }
+}
+const subtitleFontSize = ref(savedSubtitleFontSize());
+function setSubtitleFontSize(value) {
+  subtitleFontSize.value = Math.min(60, Math.max(12, Math.round(Number(value) || 20)));
+  if (art) art.subtitle.style({fontSize: `${subtitleFontSize.value}px`});
+  try { localStorage.setItem(subtitleFontSizeKey, String(subtitleFontSize.value)); } catch {}
+  return `${subtitleFontSize.value}px`;
+}
 const use302Play = localStorage.getItem('use_302_play');
 const use_302_play = ref(use302Play === null ? false : use302Play === 'true')
-let vttUrls = ref([])
+let currentVttBlob = null;
+let subtitleErrorShown = false;
+const subtitleLoader = new SegmentedSubtitleLoader({
+  getTime: () => art?.currentTime || 0,
+  fetchText: async (address) => {
+    const response = await fetch(address, {
+      credentials: 'same-origin', headers: {Authorization: VueCookies.get('authorization') || ''}
+    });
+    if (!response.ok) throw new Error(`字幕服务返回 HTTP ${response.status}`);
+    const text = await response.text();
+    if (text.trim().startsWith('{')) {
+      const data = JSON.parse(text);
+      throw new Error(data.code === -2 ? '字幕鉴权失败，请重新登录' : errorText(data));
+    }
+    return text;
+  },
+  clear: () => {
+    assRenderer.clear();
+    pgsRenderer.clear();
+    subtitleRenderMode.value = 'text';
+    if (art) art.subtitle.show = false;
+    if (currentVttBlob) URL.revokeObjectURL(currentVttBlob);
+    currentVttBlob = null;
+  },
+  render: async (text) => {
+    if (!art || subtitleRenderMode.value !== 'text') return;
+    const generation = subtitleLoader.generation;
+    const next = createBlobVTTUrl(text);
+    const previous = currentVttBlob;
+    currentVttBlob = next;
+    await art.subtitle.switch(next, {type: 'vtt', encoding: 'utf-8'});
+    if (generation === subtitleLoader.generation && currentSubtitle.value) art.subtitle.show = subtitleRenderMode.value === 'text';
+    if (previous) URL.revokeObjectURL(previous);
+  }
+});
+
+function showSubtitleError(error) {
+  subtitlePlaybackError.value = errorText(error).includes('404')
+    ? '当前字幕文件或分段已不可用，请打开“搜索字幕”重新加载、切换轨道或搜索其他字幕。' : errorText(error);
+  if (!subtitleErrorShown) COMMON.ShowMsg(subtitlePlaybackError.value);
+  subtitleErrorShown = true;
+}
 const danmuTitleData = ref({
   name: "danmuTitle",
   html: "弹幕加载中...",
@@ -67,9 +405,14 @@ const IsFullscreen = () => {
   art.fullscreen
 }
 
-guid.value = proxy.$route.query.guid
-episode_guid.value = PlayerData.episode_guid
-gallery_type.value = proxy.$route.query.gallery_type
+function selectPlayback(query) {
+  const selected = playbackSelection(query);
+  guid.value = selected.guid;
+  gallery_type.value = selected.category;
+  episode_guid.value = selected.episodeGuid;
+  EpisodeList.value = null;
+}
+selectPlayback(proxy.$route.query);
 
 var danmu_setting = window.localStorage.danmu_setting;
 if (danmu_setting === undefined) {
@@ -98,9 +441,10 @@ const setting = ref({
   url: "",
   id: "",
   customType: {
-    m3u8: function (video, url) {
-      const hls = new Hls({
+    m3u8: function (video, url, player) {
+      const hls = replaceMediaEngine(player, () => new Hls({
         enableWebVTT: false, // 仍然关闭 WebVTT 的原生渲染
+        renderTextTracksNatively: false,
         xhrSetup: (xhr, reqUrl) => {
           if (reqUrl.endsWith('.vtt')) {
             // 在真正发送前就中断请求
@@ -108,33 +452,25 @@ const setting = ref({
           }
           // 还可以在这里对其他请求做自定义头等处理
         },
-      });
+      }));
       hls.loadSource(url)
       hls.attachMedia(video)
     },
-    flv: function (video, url) {
-      const flvPlayer = flvjs.createPlayer({
+    flv: function (video, url, player) {
+      const flvPlayer = replaceMediaEngine(player, () => flvjs.createPlayer({
         type: 'flv',
         url: url
-      })
+      }))
       flvPlayer.attachMediaElement(video)
       flvPlayer.load()
     },
-    mkv: function (video, url) {
-      const flvPlayer = flvjs.createPlayer({
-        type: 'mkv',
-        url: url
-      })
-      flvPlayer.attachMediaElement(video)
-      flvPlayer.load()
+    mkv: function (video, url, player) {
+      releaseMediaEngine(player);
+      video.src = url;
     },
-    mp4: function (video, url) {
-      const flvPlayer = flvjs.createPlayer({
-        type: 'mkv',
-        url: url
-      })
-      flvPlayer.attachMediaElement(video)
-      flvPlayer.load()
+    mp4: function (video, url, player) {
+      releaseMediaEngine(player);
+      video.src = url;
     }
   },
   title: "",
@@ -155,8 +491,8 @@ const setting = ref({
   playbackRate: false,
   aspectRatio: true,
   fastForward: true,
-  fullscreen: true,
-  fullscreenWeb: !/Android|webOS|iPhone|iPod|BlackBerry/i.test(navigator.userAgent),
+  fullscreen: !touchPlayer,
+  fullscreenWeb: !touchPlayer,
   subtitleOffset: false,
   miniProgressBar: false,
   mutex: true,
@@ -226,23 +562,33 @@ function getDanmuparams() {
   let season = playInfo.value.type !== "Movie";
   let title = season ? playInfo.value.tv_title : playInfo.value.title
   let season_number = season ? playInfo.value.season_number : 1
-  return `douban_id=${playInfo.value.douban_id}&episode_number=${episode_number}&episode_title=${episode_title}&title=${title}&season_number=${season_number}&season=${season}&guid=${episode_guid.value}&parent_guid=${guid.value}`
+  return new URLSearchParams({
+    douban_id: playInfo.value.douban_id ?? '', episode_number, episode_title: episode_title ?? '',
+    title: title ?? '', season_number: season_number ?? 1, season,
+    guid: episode_guid.value ?? '', parent_guid: guid.value ?? ''
+  }).toString();
 }
 
 async function loadDanmuku() {
+  const generation = ++danmakuLoadGeneration;
+  const episodeGuid = episode_guid.value;
   danmuTitleData.value.html = `弹幕加载中...`
   art.layers.update(danmuTitleData.value)
   let episode_number = playInfo.value.episode_number === undefined ? 1 : playInfo.value.episode_number;
   let danmuku = `/danmu/get?${getDanmuparams()}`;
-  fetch(danmuku)
-      .then(res => res.json())
-      .then(json => {
-        allDanmaku.value = json;
-        danmuTitleData.value.html = `弹幕加载完成，${json[episode_number].length ?? 0}条数据`
-        // art.plugins.artplayerPluginDanmuku.load(json[episode_number])
-        art.layers.update(danmuTitleData.value)
+  return fetch(danmuku)
+      .then(res => {
+        if (!res.ok) throw new Error(`弹幕服务返回 HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(async json => {
+        if (generation !== danmakuLoadGeneration || episodeGuid !== episode_guid.value) return;
+        const rows = episodeDanmaku(json, episode_number);
+        await applyDanmakuRows(rows, episode_number);
       }).catch(err => {
-    danmuTitleData.value.html = `弹幕加载失败`
+    if (generation !== danmakuLoadGeneration || episodeGuid !== episode_guid.value) return;
+    danmuTitleData.value.html = '弹幕加载失败，请检查服务日志';
+    COMMON.ShowMsg(errorText(err));
     art.layers.update(danmuTitleData.value)
   })
 }
@@ -398,7 +744,7 @@ async function GetPalyUrlBy302() {
   }
 }
 
-async function GetPalyUrl() {
+async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts) {
   if (art !== null && art !== undefined) {
     art.loading.show = true;
   }
@@ -415,14 +761,15 @@ async function GetPalyUrl() {
     "video_encoder": StreamList.value.video_streams[0].codec_name,
     "resolution": QualityData.value[0].resolution,
     "bitrate": StreamList.value.video_streams[0].bps,
-    "startTimestamp": playInfo.value.watched_ts,
+    "startTimestamp": startTimestamp,
     "audio_encoder": "aac",
     "audio_guid": StreamList.value.audio_streams[0].guid,
-    "subtitle_guid": currentSubtitle.value ? currentSubtitle.value.guid : "",
+    "subtitle_guid": streamSubtitleGuid(currentSubtitle.value),
     "channels": await GetChannels(_channels)
   };
   let res = await COMMON.requests("POST", api, true, _data)
   if (res !== null) {
+    serverSubtitleGuid = _data.subtitle_guid;
     urlBase.value = res.play_link;
     url.value = COMMON.fnHost + res.play_link;
     playUrl.value = window.location.origin + url.value
@@ -442,7 +789,7 @@ async function SendPlayRecord() {
       "media_guid": StreamList.value.video_streams[0].media_guid,
       "video_guid": StreamList.value.video_streams[0].guid,
       "audio_guid": StreamList.value.audio_streams[0].guid,
-      "subtitle_guid": "",
+      "subtitle_guid": currentSubtitle.value?.guid || "",
       "resolution": QualityData.value[0].resolution,
       "bitrate": QualityData.value[0].bitrate,
       "ts": Math.floor(art.currentTime),
@@ -541,34 +888,57 @@ async function getVideoConfig() {
 
 // 添加字幕切换函数
 async function switchSubtitle(item, $dom, event) {
-  debugger
-  if (!item || !item.guid) {
-    // 关闭字幕
-    currentSubtitle.value = "";
-  } else {
-    currentSubtitle.value = item;
-  }
-  var api = '/api/v1/media/p'
-  let data = {
-    "req": "media.resetSubtitle",
-    "reqid": "1234567890ABCDEF",
-    "playLink": urlBase.value,
-    "startTimestamp": 1783,
-    "subtitleIndex": item.index
-  }
-  let res = await COMMON.requests("POST", api, true, data)
-  if (res.updateM3u8) {
-    // 重新获取播放地址
-    await GetPalyUrl();
-    if (art) {
-      await art.switchUrl(url.value);
+  if (!item) return '字幕';
+  const position = Math.max(0, Math.floor(art?.currentTime || 0));
+  const selection = ++subtitleSwitchGeneration;
+  subtitleLoader.clear();
+  try {
+    subtitlePlaybackError.value = '';
+    if (isPgsSubtitle(item) && serverSubtitleGuid === '') {
+      currentSubtitle.value = item;
+      subtitleTrackGuid.value = item.guid;
+      subtitleErrorShown = false;
+      await switchSubtitleUrl();
+      if (selection !== subtitleSwitchGeneration) return item.html;
+      await UpdateControl(art);
+      return item.html;
     }
+    if (item.guid && (item.forceReload || item.extra_file)) {
+      const previousLink = urlBase.value;
+      currentSubtitle.value = item;
+      subtitleErrorShown = false;
+      playInfo.value.watched_ts = position;
+      await GetPalyUrl(position);
+      await art.switchUrl(url.value);
+      art.seek = position;
+      if (previousLink && previousLink !== urlBase.value) void mediaP('media.quit', previousLink).catch(() => {});
+      await UpdateControl(art);
+      return item.html;
+    }
+    const res = await COMMON.requests('POST', '/api/v1/media/p', true, {
+      req: 'media.resetSubtitle', reqid: '1234567890ABCDEF', playLink: urlBase.value,
+      startTimestamp: position, subtitleIndex: item.guid && !isPgsSubtitle(item) ? item.index : -1
+    });
+    if (selection !== subtitleSwitchGeneration) return item.html;
+    if (res?.result === 'fail') throw new Error(`字幕切换失败（${res.errno ?? '未知错误'}）`);
+    serverSubtitleGuid = streamSubtitleGuid(item);
+    currentSubtitle.value = item.guid ? item : null;
+    subtitleTrackGuid.value = item.guid || '';
+    subtitleErrorShown = false;
+    if (res?.updateM3u8) {
+      playInfo.value.watched_ts = position;
+      await GetPalyUrl(position);
+      await art.switchUrl(url.value);
+      art.seek = position;
+    } else if (currentSubtitle.value) {
+      await switchSubtitleUrl();
+    }
+    await UpdateControl(art);
+    return item.html;
+  } catch (error) {
+    if (selection === subtitleSwitchGeneration) showSubtitleError(error);
+    return '字幕';
   }
-  if (art) {
-    const subtitle_url = '/fnos' + urlBase.value.replace("preset", "subtitle");
-    switchSubtitleUrl(subtitle_url)
-  }
-  return item.html
 }
 
 async function addArtConfig(_art, key, v) {
@@ -585,7 +955,7 @@ async function UpdateControl(_art) {
   // 添加画质选择器
   if (qualitySelector.value.length > 0) {
     const qualityControl = {
-      disable: (!art.fullscreen && COMMON.isMo),
+      disable: false,
       index: 1,
       name: '画质',
       position: 'right',
@@ -607,7 +977,7 @@ async function UpdateControl(_art) {
   }
 
   let 倍速 = {
-    disable: (!art.fullscreen && COMMON.isMo),
+    disable: false,
     index: 2,
     name: '倍速',
     position: 'right',
@@ -649,29 +1019,26 @@ async function UpdateControl(_art) {
   })
   forData.push(倍速)
 
-  // 添加字幕选择器
+  // 同时提供播放器按钮和设置菜单，使用 guid 保留所有字幕轨道。
+  try { _art.controls.remove('字幕'); } catch {}
+  try { _art.setting.remove('字幕选择'); } catch {}
   if (StreamList.value && StreamList.value.subtitle_streams && StreamList.value.subtitle_streams.length > 0) {
+    const choices = subtitleOptions(StreamList.value.subtitle_streams, currentSubtitle.value?.guid);
     const subtitleControl = {
-      disable: (!art.fullscreen && COMMON.isMo),
+      disable: false,
       index: 3,
       name: '字幕',
       position: 'right',
       html: '字幕',
-      selector: [
-        {
-          html: '关闭字幕',
-          guid: null
-        },
-        ...[...new Map(StreamList.value.subtitle_streams.map(item => [item.index, item])).values()].map(sub => ({
-          html: sub.title + sub.language,
-          guid: sub.guid,
-          default: sub.is_default === 1,
-          index: sub.index
-        }))
-      ],
+      selector: choices,
       onSelect: switchSubtitle
     };
     forData.push(subtitleControl);
+    await addArtConfig(_art, 'setting', {
+      name: '字幕选择', html: '字幕', tooltip: '选择字幕轨道',
+      selector: subtitleOptions(StreamList.value.subtitle_streams, currentSubtitle.value?.guid),
+      onSelect: switchSubtitle
+    });
   }
 
   if (EpisodeList.value !== null && EpisodeList.value.length > 0) {
@@ -702,7 +1069,7 @@ async function UpdateControl(_art) {
     }
 
     let 选集 = {
-      disable: (!art.fullscreen && COMMON.isMo),
+      disable: false,
       name: '选集',
       index: 4,
       position: 'right',
@@ -718,8 +1085,36 @@ async function UpdateControl(_art) {
   }
 
   for (let item of forData) {
+    if (['画质', '倍速', '选集'].includes(item.name)) {
+      await addArtConfig(_art, 'setting', {...item, name: item.name + '设置', tooltip: item.html});
+      if (touchPlayer) item.disable = true;
+    }
     await addArtConfig(_art, 'controls', item)
   }
+
+  await addArtConfig(_art, 'setting', {
+    name: '字幕大小', html: '字幕大小', tooltip: `${subtitleFontSize.value}px`,
+    range: [subtitleFontSize.value, 12, 60, 1],
+    onChange: item => setSubtitleFontSize(item.range[0]),
+    onRange: item => setSubtitleFontSize(item.range[0])
+  });
+  await addArtConfig(_art, 'setting', {
+    name: 'ASS特效字幕', html: 'ASS 特效字幕', tooltip: useAssSubtitles.value ? '原始样式' : '普通字幕',
+    switch: useAssSubtitles.value,
+    onSwitch: item => {
+      useAssSubtitles.value = !item.switch;
+      localStorage.setItem('fnosAssSubtitles', String(useAssSubtitles.value));
+      if (currentSubtitle.value) void switchSubtitleUrl().catch(showSubtitleError);
+      return useAssSubtitles.value;
+    }
+  });
+  await addArtConfig(_art, 'setting', {
+    name: '搜索字幕', html: '搜索字幕 / 重新加载', tooltip: '手动查询与选择',
+    onClick: openSubtitleSearch
+  });
+  await addArtConfig(_art, 'setting', {
+    name: '搜索弹幕', html: '搜索弹幕', tooltip: '选择平台与集数', onClick: openDanmakuSearch
+  });
 
   await addArtConfig(_art, 'setting', {
     name: "跳过片头片尾",
@@ -762,11 +1157,24 @@ async function UpdateControl(_art) {
 }
 
 async function play() {
+  danmakuLoadGeneration++;
+  showDanmakuSearch.value = false;
+  danmakuResults.value = [];
+  danmakuEpisodes.value = [];
+  danmakuSearchDone.value = false;
+  danmakuSearchError.value = '';
+  subtitleSearchGeneration++;
+  subtitleSearchBusy.value = false;
+  showSubtitleSearch.value = false;
+  subtitleResults.value = [];
+  subtitleSearchDone.value = false;
+  subtitleSearchError.value = '';
+  subtitlePlaybackError.value = '';
   if (timerSendPlayRecord.value !== null) {
     clearInterval(timerSendPlayRecord.value)
   }
   let playLink = urlBase.value;
-  if (episode_guid.value === null) {
+  if (!episode_guid.value) {
     let guidPlayInfo = await GetPayInfo(guid.value)
     episode_guid.value = guidPlayInfo.item.guid
   }
@@ -774,10 +1182,13 @@ async function play() {
   playInfo.value = _PayInfo.item;
   await GetStreamList();
 
-  // 初始化字幕
+  subtitleLoader.clear();
+  currentSubtitle.value = null;
+  // 优先使用播放记录中的轨道，其次使用默认轨道。
   if (StreamList.value && StreamList.value.subtitle_streams && StreamList.value.subtitle_streams.length > 0) {
-    const defaultSubtitle = StreamList.value.subtitle_streams.find(sub => sub.is_default === 1);
-    currentSubtitle.value = defaultSubtitle || null;
+    const tracks = StreamList.value.subtitle_streams;
+    currentSubtitle.value = tracks.find(sub => sub.guid === playInfo.value.subtitle_guid)
+      || tracks.find(sub => Number(sub.is_default) === 1) || tracks[0];
   }
 
   await GetQuality();
@@ -792,15 +1203,68 @@ async function play() {
 }
 
 async function play_next() {
+  if (!Array.isArray(EpisodeList.value) || gallery_type.value === 'Movie') return;
   let episode_data = EpisodeList.value.find(o => o.episode_number === (playInfo.value.episode_number + 1))
   episode_guid.value = episode_data.guid
   await play()
 }
 
-function switchSubtitleUrl(m3u8Url) {
-  M3U8SubtitlePlugin(m3u8Url).then(r => {
-    vttUrls.value = r
-  })
+async function switchSubtitleUrl({plain = false} = {}) {
+  if (!currentSubtitle.value || !urlBase.value) return;
+  subtitleLoader.clear();
+  const generation = subtitleLoader.generation;
+  const selected = currentSubtitle.value;
+  const format = String(selected.codec_name || selected.format || '').toLowerCase();
+  if (isPgsSubtitle(selected)) {
+    const address = '/danmu/subtitle-pgs?' + new URLSearchParams({item_guid: episode_guid.value, subtitle_guid: selected.guid});
+    const data = await waitForAssSubtitle(() => danmakuRequest(address), () => generation === subtitleLoader.generation, {
+      onPending: () => COMMON.ShowMsg('正在后台准备 PGS 图片字幕，完成后自动显示')
+    });
+    if (!data || generation !== subtitleLoader.generation) return;
+    const shown = await pgsRenderer.show(art.video, data.url);
+    if (!shown || generation !== subtitleLoader.generation) return;
+    subtitleRenderMode.value = 'pgs';
+    art.subtitle.show = false;
+    return;
+  }
+  if (!plain && useAssSubtitles.value && ['ass', 'ssa'].includes(format)) {
+    // 特效提取和字体初始化期间先显示普通字幕；不阻塞 ASS，也不覆盖后来选择的轨道。
+    void COMMON.requestsText('/api/v1/subtitle/dl/' + selected.guid, {fmt: 'vtt'}).then(async text => {
+      if (generation !== subtitleLoader.generation || subtitleRenderMode.value !== 'text') return;
+      if (/^\uFEFF?WEBVTT(?:\s|$)/.test(text)) await subtitleLoader.render(text);
+    }).catch(() => {});
+    try {
+      const address = '/danmu/subtitle-ass?' + new URLSearchParams({item_guid: episode_guid.value, subtitle_guid: selected.guid});
+      const data = await waitForAssSubtitle(() => danmakuRequest(address), () => generation === subtitleLoader.generation, {
+        onPending: () => COMMON.ShowMsg('正在后台准备特效字幕，期间先显示普通字幕')
+      });
+      if (!data || generation !== subtitleLoader.generation) return;
+      const shown = await assRenderer.show(art.video, data.ass, data.fonts);
+      if (generation !== subtitleLoader.generation || !shown) return;
+      subtitleRenderMode.value = 'ass';
+      art.subtitle.show = false;
+      return;
+    } catch (error) {
+      if (generation !== subtitleLoader.generation) return;
+      assRenderer.clear();
+      COMMON.ShowMsg('特效字幕加载失败，尝试普通字幕：' + errorText(error));
+    }
+  }
+  // 与当前官方网页一致，优先下载完整文本字幕，避免分段会话失效和重复建轨。
+  try {
+    const text = await COMMON.requestsText('/api/v1/subtitle/dl/' + currentSubtitle.value.guid, {fmt: 'vtt'});
+    if (generation !== subtitleLoader.generation) return;
+    if (!/^\uFEFF?WEBVTT(?:\s|$)/.test(text)) throw new Error('完整字幕不是 WebVTT 格式');
+    await subtitleLoader.render(text);
+    return;
+  } catch (error) {
+    if (generation !== subtitleLoader.generation) return;
+    console.warn('完整字幕获取失败，使用分段字幕：', errorText(error));
+  }
+  const address = new URL('/fnos' + urlBase.value, window.location.origin);
+  address.pathname = address.pathname.replace(/\/preset\.[^/]+$/, '/subtitle.m3u8');
+  try { await subtitleLoader.setPlaylist(address.href); }
+  catch (error) { if (generation === subtitleLoader.generation - 1) throw error; }
 }
 
 
@@ -814,8 +1278,8 @@ async function ready() {
   art.seek = playInfo.value.watched_ts
 
   if (currentSubtitle.value) {
-    const subtitle_url = '/fnos' + urlBase.value.replace("preset", "subtitle");
-    switchSubtitleUrl(subtitle_url)
+    subtitleErrorShown = false;
+    void switchSubtitleUrl().catch(showSubtitleError);
   }
 
   danmuConfig.value.loadedUntil = playInfo.value.watched_ts;
@@ -837,14 +1301,14 @@ async function ready() {
   art.layers.update(
       {
         name: "title",
-        html: `<div class="art-title">第${playInfo.value.episode_number}集${playInfo.value.title === undefined ? "" : ":" + playInfo.value.title}</div>`,
+        html: createPlayerHeading(),
         style: {
           position: 'absolute',
           top: '10px',
           left: '10px',
           color: '#fff',
           fontSize: '16px',
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          backgroundColor: 'transparent',
           padding: '4px 8px',
           borderRadius: '4px',
         }
@@ -855,6 +1319,11 @@ async function ready() {
 
 const artF = async (data) => {
   art = data;
+  setSubtitleFontSize(subtitleFontSize.value);
+  bindSubtitleTrack(art);
+  art.on('subtitleLoad', () => {
+    if (currentSubtitle.value) art.subtitle.update();
+  });
   art.on('restart', () => {
     ready();
   });
@@ -863,7 +1332,7 @@ const artF = async (data) => {
     localStorage.playbackRate = art.playbackRate;
   });
   let lastSkipIndex = -1;
-  let lastDanmuLoadedUntil = 0;
+  lastDanmuLoadedUntil = -1;
   art.on("video:timeupdate", () => {
     const currentTime = art.currentTime;
 
@@ -917,88 +1386,12 @@ const artF = async (data) => {
     }
   });
 
-  let lastSubtitleIndex = -1;
-  let vttText = 'WEBVTT\n\nX-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000';   // ← 预置一个干净的头
-  let currentBlobUrl = null;
-  const cache = new Map();
-  const addedIndexes = new Set(); // 防止重复添加段
-
-  // 带重试的 fetch
-  async function fetchWithRetry(url, options = {}, retries = 3, delay = 500) {
-    for (let i = 0; i < retries; i++) {
-      try {
-        const res = await fetch(url, options);
-        if (res.ok) {
-          return res;
-        } else {
-          console.warn(`Fetch ${url} 返回 ${res.status}，第 ${i + 1} 次重试`);
-        }
-      } catch (err) {
-        console.warn(`Fetch ${url} 出错，第 ${i + 1} 次重试：`, err);
-      }
-      // 等待
-      await new Promise(r => setTimeout(r, delay));
-    }
-    throw new Error(`Fetch ${url} 失败，超过 ${retries} 次重试`);
-  }
-
-  async function loadSegment(i) {
-    if (cache.has(i)) return cache.get(i);
-    const vttUrl = vttUrls.value[i];
-    if (!vttUrl) return '';
-
-    const res = await fetchWithRetry(vttUrl, {}, 3, 500);
-    const text = await res.text();
-
-    // 1)丢掉头部
-    const parts = text.split(/\r?\n\r?\n/);
-    const payload = parts.slice(1).join('\n\n').trim();
-    const clean = payload ? (payload + '\n\n') : '';
-
-    cache.set(i, clean);
-    return clean;
-  }
-
-  function updateSubtitle() {
-    const nowIndex = Math.floor(art.currentTime / 6);
-    // 如果是回退
-    if (nowIndex < lastSubtitleIndex) {
-      vttText = 'WEBVTT\n\nX-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000';
-      lastSubtitleIndex = -1;
-      addedIndexes.clear();
-      if (currentBlobUrl) {
-        URL.revokeObjectURL(currentBlobUrl);
-        currentBlobUrl = null;
-      }
-    }
-    if (nowIndex > lastSubtitleIndex) {
-      lastSubtitleIndex = nowIndex;
-      // 跳过已加载段
-      if (addedIndexes.has(nowIndex)) return;
-      loadSegment(nowIndex).then(clean => {
-        if (!clean) return;
-        // 只添加未加载的内容
-        addedIndexes.add(nowIndex);
-        vttText += clean;
-        // 预加载下一个
-        loadSegment(nowIndex + 1).catch(() => {
-        });
-        // 释放旧 URL
-        if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
-        currentBlobUrl = createBlobVTTUrl(vttText);
-        art.subtitle.switch(currentBlobUrl);
-      }).catch(err => console.error('字幕加载失败', err));
-    }
-
-  }
-
-  art.on('video:timeupdate', updateSubtitle);
-  // 监听用户 seek
-  art.on('video:seeked', () => {
-    lastSubtitleIndex = -1;
-    vttText = 'WEBVTT\n\nX-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000';
+  art.on('video:timeupdate', () => {
+    if (currentSubtitle.value && !subtitlePlaybackError.value) void subtitleLoader.update(art.currentTime).catch(showSubtitleError);
   });
-
+  art.on('video:seeked', () => {
+    if (currentSubtitle.value && !subtitlePlaybackError.value) void subtitleLoader.update(art.currentTime).catch(showSubtitleError);
+  });
 
   art.on('video:ended', () => {
     play_next()
@@ -1007,24 +1400,11 @@ const artF = async (data) => {
     await UpdateControl(art);
   });
 
+  art.on('fullscreenWeb', async () => { await UpdateControl(art); });
+
   art.on('control', (state) => {
-    art.layers.update(
-        {
-          disable: !state,
-          name: "title",
-          html: `<div class="art-title">第${playInfo.value.episode_number}集${playInfo.value.title === undefined ? "" : ":" + playInfo.value.title}</div>`,
-          style: {
-            position: 'absolute',
-            top: '10px',
-            left: '10px',
-            color: '#fff',
-            fontSize: '16px',
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            padding: '4px 8px',
-            borderRadius: '4px',
-          }
-        }
-    )
+    // 控制栏事件可在按下和松开之间触发；保留按钮节点，避免丢失 click。
+    if (playerHeading?.parentElement) playerHeading.parentElement.style.display = state ? '' : 'none';
     danmuTitleData.value.disable = !state
     art.layers.update(danmuTitleData.value)
   });
@@ -1085,7 +1465,13 @@ const dynamicInputCreateByUrl = () => {
 }
 
 async function getInstance(_art) {
+  disposeDesktopIdle();
+  disposeMobileDanmaku();
+  disposeMobileFullscreen();
+  disposeMobileFullscreen = installMobileFullscreen(_art);
   await artF(_art);
+  disposeMobileDanmaku = installMobileDanmaku(_art);
+  disposeDesktopIdle = installDesktopIdle(_art);
   art = _art;
   art.id = episode_guid.value
   art.url = url.value
@@ -1102,9 +1488,7 @@ const onMountedFun = async () => {
 };
 
 onBeforeRouteUpdate(async (to, from) => {
-  guid.value = to.query.id;
-  gallery_type.value = to.query.gallery_type;
-  episode_guid.value = to.query.season_id;
+  selectPlayback(to.query);
   await onMountedFun();
 });
 
@@ -1116,6 +1500,11 @@ onBeforeRouteLeave((to, from) => {
 });
 
 onBeforeUnmount(async () => {
+  releaseExternalPlaylist();
+  disposeDesktopIdle();
+  disposeMobileDanmaku();
+  disposeMobileFullscreen();
+  subtitleLoader.clear();
   if (timerSendPlayRecord.value) {
     clearInterval(timerSendPlayRecord.value)
     timerSendPlayRecord.value = null
@@ -1129,14 +1518,14 @@ onMounted(async () => {
 
 <template>
   <div v-if="loading" class="load"></div>
-  <div v-else class="content">
+  <div v-else class="content watch-page">
     <n-grid cols="1" item-responsive responsive="screen">
       <n-grid-item span="12 m:12 l:9 xl:9 2xl:9">
         <div class="player">
           <Artplayer class="art-player" @get-instance="getInstance" :option="setting" :style="ArtplayerStyle"/>
         </div>
 
-        <div class="showContainer">
+        <div class="showContainer watch-info">
           <div class="data-header">
             <div class="header-left">
               <div class="season-title">
@@ -1144,10 +1533,12 @@ onMounted(async () => {
               </div>
             </div>
             <div class="header-right">
-              <n-button @click="showSetUp = !showSetUp;art.pause()" strong secondary circle>
+              <n-button @click="openDanmakuSearch" strong secondary><template #icon><i class="bx bx-message-dots"></i></template>弹幕</n-button>
+              <n-button @click="openSubtitleSearch" strong secondary><template #icon><i class="bx bx-captions"></i></template>字幕</n-button>
+              <n-button @click="showSetUp = !showSetUp;art.pause()" title="播放设置" aria-label="播放设置" strong secondary circle>
                 <i class='bx bx-cog'></i>
               </n-button>
-              <n-button @click="showModal = !showModal;art.pause()" strong secondary circle>
+              <n-button @click="openExternalPlayback" title="更多播放方式" aria-label="更多播放方式" strong secondary circle>
                 <i class='bx bx-dots-vertical-rounded'></i>
               </n-button>
             </div>
@@ -1163,6 +1554,69 @@ onMounted(async () => {
       </n-grid-item>
     </n-grid>
   </div>
+
+  <n-modal v-model:show="showDanmakuSearch" title="搜索与选择弹幕" preset="card"
+           :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">
+    <n-space vertical :size="16">
+      <n-text>当前集：{{ playInfo?.title }}<span v-if="playInfo?.episode_number"> · 第 {{ playInfo.episode_number }} 集</span></n-text>
+      <n-input v-model:value="danmakuKeyword" placeholder="输入片名、别名，或粘贴具体集数的平台播放链接" :disabled="danmakuBusy" @keyup.enter="searchDanmaku" />
+      <n-space :wrap="false">
+        <n-select v-model:value="danmakuSearchSource" :options="[{label: '360影视', value: '360'}, {label: '豆瓣', value: 'douban'}]"
+                  :disabled="danmakuBusy" style="width: 150px" />
+        <n-button type="primary" @click="searchDanmaku" :loading="danmakuBusy" :disabled="!danmakuKeyword.trim()">查询弹幕来源</n-button>
+      </n-space>
+      <n-text depth="3">先选择平台，再确认对应集数；保存仅替换当前集的弹幕来源。平台无资源或无弹幕时，可换来源或粘贴具体集数链接。</n-text>
+      <n-alert v-if="danmakuSearchError" type="error" :show-icon="false">{{ danmakuSearchError }}</n-alert>
+      <n-empty v-if="danmakuSearchDone && !danmakuResults.length" description="未找到来源，请尝试别名、切换搜索来源或粘贴播放链接" />
+      <div v-if="danmakuEpisodes.length" style="padding: 12px; border: 1px solid #8885; border-radius: 6px">
+        <div style="margin-bottom: 8px">{{ danmakuSelectedSource?.title }} · {{ danmakuSelectedSource?.platform }}</div>
+        <n-select v-model:value="danmakuSelectedEpisode" :options="danmakuEpisodeOptions" :disabled="danmakuBusy" />
+        <n-button style="margin-top: 12px" type="primary" @click="useDanmakuEpisode" :loading="danmakuBusy">保存并加载到当前集</n-button>
+      </div>
+      <div v-for="(result, index) in danmakuResults" :key="result.url + index" style="padding: 12px; border: 1px solid #8885; border-radius: 6px">
+        <n-space justify="space-between" align="center">
+          <div>{{ result.title }}<span v-if="result.season"> · 第 {{ result.season }} 季</span> · {{ result.platform }}</div>
+          <n-button @click="chooseDanmakuSource(result)" :disabled="danmakuBusy">选择集数</n-button>
+        </n-space>
+      </div>
+    </n-space>
+  </n-modal>
+
+  <n-modal v-model:show="showSubtitleSearch" title="搜索与选择字幕" preset="card"
+           :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">
+    <n-space vertical :size="16">
+      <n-text depth="3">ASS / SSA 默认保留字体、定位和动画。若设备渲染异常，可在播放器设置中关闭“ASS 特效字幕”；普通字幕大小滑块不覆盖 ASS 原始样式。</n-text>
+      <n-alert v-if="subtitlePlaybackError" type="warning" :show-icon="false">{{ subtitlePlaybackError }}</n-alert>
+      <div>
+        <div style="margin-bottom: 8px">现有字幕</div>
+        <n-space :wrap="false">
+          <n-select v-model:value="subtitleTrackGuid" :options="subtitleTrackChoices" style="min-width: 220px; flex: 1"
+                    :disabled="subtitleDownloadBusy" />
+          <n-button @click="reloadSelectedSubtitle" :disabled="subtitleDownloadBusy">应用 / 重新加载</n-button>
+        </n-space>
+      </div>
+      <div>查询当前影片：{{ playInfo?.title }}<span v-if="playInfo?.episode_number"> · 第 {{ playInfo.episode_number }} 集</span></div>
+      <n-text depth="3">按当前影片匹配飞牛在线字幕，可选择语言查询，再筛选文件名。下载后会添加到该影片。</n-text>
+      <n-space :wrap="false">
+        <n-select v-model:value="subtitleSearchLanguage" :options="subtitleSearchLanguages" style="width: 140px"
+                  :disabled="subtitleSearchBusy || subtitleDownloadBusy" />
+        <n-button type="primary" @click="searchSubtitles" :loading="subtitleSearchBusy" :disabled="subtitleDownloadBusy">查询字幕</n-button>
+      </n-space>
+      <n-input v-model:value="subtitleSearchFilter" clearable placeholder="筛选结果中的文件名，例如简中、双语或版本名" />
+      <n-alert v-if="subtitleSearchError" type="error" :show-icon="false">{{ subtitleSearchError }}</n-alert>
+      <n-empty v-if="subtitleSearchDone && !filteredSubtitleResults.length" :description="subtitleResults.length ? '没有符合筛选条件的字幕' : '未找到字幕，可切换语言后重新查询'" />
+      <div v-for="result in filteredSubtitleResults" :key="result.key" style="padding: 12px; border: 1px solid #8885; border-radius: 6px">
+        <div style="overflow-wrap: anywhere; margin-bottom: 8px">{{ result.filename }}</div>
+        <n-space justify="space-between" align="center">
+          <n-text depth="3">{{ result.format || '字幕' }}<span v-if="result.language || result.lan"> · {{ result.language || result.lan }}</span></n-text>
+          <n-button @click="useSearchedSubtitle(result)" :loading="subtitleDownloadBusy"
+                    :disabled="subtitleSearchBusy || !result.trimId || !['SRT','SUBRIP','ASS','SSA','VTT','WEBVTT'].includes(result.format)">
+            {{ result.existingGuid ? '选择并使用' : '下载并使用' }}
+          </n-button>
+        </n-space>
+      </div>
+    </n-space>
+  </n-modal>
 
   <n-modal v-model:show="showSetUp" title="跳过时间段整季可用，平台链接当前集可用" preset="dialog" draggable="true"
            :style="{ width: '30em', maxHeight: '30em', overflowY: 'auto' }">
@@ -1214,16 +1668,25 @@ onMounted(async () => {
     </template>
   </n-modal>
   <n-modal transform-origin="center" v-model:show="showModal">
-    <n-card style="width: 600px" title="外部播放器/播放时请不要关闭本网页，不然播放链接会过期" :bordered="false"
+    <n-card :style="{width: 'min(600px, 94vw)'}" title="外部播放器" :bordered="false"
             size="huge" role="dialog" aria-modal="true">
       <template #header-extra>
         <n-button @click="showModal = !showModal" strong secondary circle>
           <i class='bx bx-x'></i>
         </n-button>
       </template>
-      <ul class="play-list">
+      <p>临时播放链接有效期 4 小时，播放期间请保留本网页。服务重启后请重新获取链接。</p>
+      <p v-if="externalBusy" role="status">正在准备外部播放链接…</p>
+      <div v-else-if="externalError" role="alert">
+        <p>{{ externalError }}</p><n-button @click="openExternalPlayback">重新获取链接</n-button>
+      </div>
+      <div v-else-if="externalMediaUrl">
+        <p>PotPlayer：下载下方播放列表后用播放器打开，或复制 HTTP 地址，在 PotPlayer 按 Ctrl+U 粘贴播放。</p>
+        <n-input :value="externalMediaUrl" readonly aria-label="外部播放器 HTTP 媒体地址" @focus="event => event.target.select?.()" />
+      </div>
+      <ul v-if="externalMediaUrl && !externalBusy && !externalError" class="play-list">
         <li class="play-item">
-          <a :href="'iina://weblink/?url=' + playUrl" target="_blank">
+          <a :href="externalHref('iina')">
             <n-tooltip trigger="hover">
               <template #trigger>
                 <img class="play-icon" src="/images/iina.webp" alt="">
@@ -1233,27 +1696,27 @@ onMounted(async () => {
           </a>
         </li>
         <li class="play-item">
-          <a :href="'potplayer://' + playUrl" target="_blank">
+          <a :href="externalPlaylistUrl" download="fnos-tv-playlist.m3u" aria-label="下载 PotPlayer 播放列表">
             <n-tooltip trigger="hover">
               <template #trigger>
                 <img class="play-icon" src="/images/potplayer.webp" alt="">
               </template>
-              Potplayer
+              PotPlayer 播放列表
             </n-tooltip>
           </a>
         </li>
         <li class="play-item">
-          <a :href="'vlc://' + playUrl" target="_blank">
+          <a :href="externalHref('vlc')">
             <n-tooltip trigger="hover">
               <template #trigger>
                 <img class="play-icon" src="/images/vlc.webp" alt="">
               </template>
-              vcl
+              VLC
             </n-tooltip>
           </a>
         </li>
         <li class="play-item">
-          <a :href="'nplayer-' + playUrl" target="_blank">
+          <a :href="externalHref('nplayer')">
             <n-tooltip trigger="hover">
               <template #trigger>
                 <img class="play-icon" src="/images/nplayer.webp" alt="">
@@ -1263,7 +1726,7 @@ onMounted(async () => {
           </a>
         </li>
         <li class="play-item">
-          <a :href="'infuse://x-callback-url/play?url=' + playUrl" target="_blank">
+          <a :href="externalHref('infuse')">
             <n-tooltip trigger="hover">
               <template #trigger>
                 <img class="play-icon" src="/images/infuse.webp" alt="">
@@ -1273,7 +1736,7 @@ onMounted(async () => {
           </a>
         </li>
         <li class="play-item">
-          <a :href="'intent:' + playUrl" target="_blank">
+          <a :href="externalHref('mxplayer')">
             <n-tooltip trigger="hover">
               <template #trigger>
                 <img class="play-icon" src="/images/mxplayer.webp" alt="">
@@ -1283,7 +1746,7 @@ onMounted(async () => {
           </a>
         </li>
         <li class="play-item">
-          <a :href="'intent:' + playUrl" target="_blank">
+          <a :href="externalHref('mxplayer-pro')">
             <n-tooltip trigger="hover">
               <template #trigger>
                 <img class="play-icon" src="/images/mxplayer-pro.webp" alt="">
@@ -1552,19 +2015,6 @@ img.play-icon {
     max-width: 30em;
   }
 
-  /* 调整控制栏按钮大小 */
-  :deep(.art-control) {
-    height: 40px !important;
-  }
-
-  :deep(.art-control .art-control-item) {
-    width: 32px !important;
-    height: 32px !important;
-  }
-
-  :deep(.art-control .art-control-item i) {
-    font-size: 16px !important;
-  }
 }
 
 /* 超小屏幕适配 */
@@ -1578,17 +2028,6 @@ img.play-icon {
     height: 40px;
   }
 
-  :deep(.art-control) {
-    height: 36px !important;
-  }
 
-  :deep(.art-control .art-control-item) {
-    width: 28px !important;
-    height: 28px !important;
-  }
-
-  :deep(.art-control .art-control-item i) {
-    font-size: 14px !important;
-  }
 }
 </style>

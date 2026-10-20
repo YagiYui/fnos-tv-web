@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {installDesktopIdle} from './src/views/Play/desktop-idle.js';
+const classes=new Set(),listeners=new Map(),events=new Map(),timers=new Map();let id=0,focus=false;
+const player={classList:{contains:n=>classes.has(n),add:n=>classes.add(n),remove:n=>classes.delete(n)},querySelector:()=>focus?{}:null,addEventListener:(n,f)=>listeners.set(n,f),removeEventListener:n=>listeners.delete(n)};
+const art={template:{$player:player},constructor:{CONTROL_HIDE_TIME:3000},playing:true,controls:{show:true},setting:{show:false},isInput:false,on:(n,f)=>events.set(n,f),off:n=>events.delete(n)};
+const win={clearTimeout:n=>timers.delete(n),setTimeout:(f,ms)=>{timers.set(++id,{f,ms});return id;}};
+const next=()=>{const [n,{f}]=[...timers][0];timers.delete(n);f();};
+const dispose=installDesktopIdle(art,win);
+assert.equal([...timers.values()][0].ms,3000);next();assert.equal(art.controls.show,false);assert.equal(classes.has('fnos-desktop-idle'),true);
+listeners.get('pointermove')({target:{closest:()=>null}});assert.equal(art.controls.show,true);assert.equal(classes.has('fnos-desktop-idle'),false);
+listeners.get('pointermove')({target:{closest:()=>({})}});next();assert.equal(art.controls.show,true,'Do not hide controls during pointer interaction');
+listeners.get('pointerleave')();next();assert.equal(art.controls.show,false,'Stale hover must not keep controls visible after leaving');
+events.get('video:pause')();assert.equal(art.controls.show,true);assert.equal(classes.has('fnos-desktop-idle'),false);
+art.playing=true;events.get('video:playing')();art.setting.show=true;next();assert.equal(art.controls.show,true);art.setting.show=false;next();assert.equal(art.controls.show,false);
+events.get('fullscreen')();assert.equal(art.controls.show,true);focus=true;next();assert.equal(art.controls.show,true);focus=false;next();assert.equal(art.controls.show,false);
+dispose();assert.equal(timers.size,0);assert.equal(listeners.size,0);assert.equal(events.size,0);assert.equal(classes.has('fnos-desktop-idle'),false);
+classes.add('fnos-touch-player');installDesktopIdle(art,win)();assert.equal(listeners.size,0);
+console.log('PASS: desktop idle hides, pointer wake, hovered controls and settings remain accessible, pause/fullscreen/focus, stale hover exit, cleanup and mobile exclusion');
