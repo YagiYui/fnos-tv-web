@@ -1,4 +1,5 @@
 <script setup>
+import HomeCarousel from "../components/HomeCarousel.vue";
 import {continuePlaybackRoute} from './Play/player-presentation.js';
 import {useMediaDbData} from '../store'
 import {getCurrentInstance, onMounted, ref, onUnmounted, computed, h} from "vue";
@@ -6,6 +7,7 @@ import {useMessage, NIcon, NProgress} from 'naive-ui'
 
 const MediaDbData = useMediaDbData()
 const message = useMessage()
+const isMobile = ref(window.innerWidth <= 768);
 const per_view = ref(window.innerWidth <= 768 ? 2 : 4);
 const per_card = ref(window.innerWidth <= 768 ? 3 : 7);
 const instance = getCurrentInstance();
@@ -23,7 +25,6 @@ function filteredItems(key) {
 const hasSearchResults = computed(() => Object.keys(MediaDbData.info).some(key => filteredItems(key).length));
 const playList = ref(null)
 const play_item_guid = ref(null);
-const EpisodeCarouselRef = ref(null);
 const showDropdown = ref(false)
 const dropdownX = ref(0)
 const dropdownY = ref(0)
@@ -90,27 +91,17 @@ const handleClickOutside = () => {
 }
 
 // 监听窗口大小变化
-window.addEventListener('resize', () => {
+const updateCarouselLayout = () => {
+  isMobile.value = window.innerWidth <= 768;
   per_view.value = window.innerWidth <= 768 ? 2 : 4;
   per_card.value = window.innerWidth <= 768 ? 3 : 7;
-});
+};
+window.addEventListener('resize', updateCarouselLayout);
 
 async function GetPlayList() {
   let api = "/api/v1/play/list"
   playList.value = await COMMON.requests("GET", api, true);
 }
-
-// 下一张
-const goNext = () => {
-  let _index = EpisodeCarouselRef.value.getCurrentIndex();
-  EpisodeCarouselRef.value?.to(_index + per_view.value);
-};
-
-// 上一张
-const goPrev = () => {
-  let _index = EpisodeCarouselRef.value.getCurrentIndex();
-  EpisodeCarouselRef.value?.to(_index - per_view.value);
-};
 
 onMounted(async () => {
   await GetPlayList();
@@ -120,6 +111,7 @@ onMounted(async () => {
 
 // 组件卸载时移除事件监听
 onUnmounted(() => {
+  window.removeEventListener('resize', updateCarouselLayout);
   document.removeEventListener('click', handleClickOutside)
 })
 </script>
@@ -140,8 +132,9 @@ onUnmounted(() => {
     <n-empty v-if="keyword && !hasSearchResults" description="没有找到匹配的已载入影片" class="catalog-empty" />
     <section class="card-shows continue-section" v-if="playList?.length && !keyword">
       <div class="section-heading"><h2>继续观看</h2></div>
-      <n-carousel :show-dots="false" show-arrow :slides-per-view="per_view" :space-between="18" ref="EpisodeCarouselRef" :loop="false" draggable>
-        <div class="continue-card" v-for="item in playList" :key="item.guid" @contextmenu="handleContextMenu($event, item)">
+      <HomeCarousel :items="playList" :per-view="per_view" :mobile="isMobile">
+        <template #default="{item}">
+        <div class="continue-card" @contextmenu="handleContextMenu($event, item)">
           <router-link :to="continuePlaybackRoute(item)">
             <div class="continue-art"><img v-lazy="item.poster ? COMMON.imgUrl + item.poster : '/images/not_gellery.png'" :alt="item.tv_title || item.title" loading="lazy"><span class="poster-play"><i class="bx bx-play"></i></span>
               <div class="continue-progress" v-if="item.duration > 0"><span :style="{width: Math.min(100, Math.max(0, Number(item.ts || 0) / item.duration * 100)) + '%'}"></span></div>
@@ -150,19 +143,22 @@ onUnmounted(() => {
             <div class="poster-caption">{{ item.type === 'Episode' ? `第 ${item.season_number} 季 · 第 ${item.episode_number} 集` : '电影' }}</div>
           </router-link>
         </div>
-      </n-carousel>
+      </template>
+      </HomeCarousel>
     </section>
     <template v-for="key in Object.keys(MediaDbData.info)" :key="key">
       <section class="card-shows" v-if="libraryInfo(key)?.category !== 'Others' && filteredItems(key).length">
         <div class="section-heading"><h2>{{ libraryInfo(key)?.title || '媒体库' }}</h2><router-link v-if="libraryInfo(key)" :to="libraryRoute(libraryInfo(key))" class="section-more">查看全部 <i class="bx bx-chevron-right"></i></router-link></div>
-        <n-carousel :show-dots="false" show-arrow :slides-per-view="per_card" :space-between="18" :loop="false" draggable>
-          <div class="view-item poster-card" v-for="item in filteredItems(key)" :key="item.guid">
+        <HomeCarousel :items="filteredItems(key)" :per-view="per_card" :mobile="isMobile">
+          <template #default="{item}">
+          <div class="view-item poster-card">
             <router-link :to="{path: '/video', query: {guid: item.guid, gallery_type: item.type}}">
               <div class="poster-art"><img v-lazy="item.poster ? COMMON.imgUrl + '/92/17/' + item.poster + '?w=300' : '/images/not_video.jpg'" :alt="item.title || item.name" loading="lazy"><span class="poster-play"><i class="bx bx-play"></i></span><span v-if="item.vote_average > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="item.played" class="poster-watched"><i class="bx bx-check"></i></span></div>
               <div class="view-item-title">{{ item.title || item.name }}</div><div class="poster-caption" v-if="item.release_date">{{ String(item.release_date).slice(0, 4) }}</div>
             </router-link>
           </div>
-        </n-carousel>
+        </template>
+      </HomeCarousel>
       </section>
     </template>
     <n-dropdown
