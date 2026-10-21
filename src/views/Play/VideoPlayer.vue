@@ -15,6 +15,10 @@ import {SubtitleOverlay, waitForAssSubtitle} from './ass-renderer.js';
 import {playbackTitle, playbackSelection} from './player-presentation.js';
 import {installMobileFullscreen} from './mobile-fullscreen.js';
 import {installMobileDanmaku} from './mobile-danmaku.js';
+import {backIcon, fullscreenIcon, fullscreenExitIcon} from './player-icons.js';
+import {exitPlayerFullscreen, installMobileGestures, installPlaybackNoticeFilter} from './player-interactions.js';
+let disposeMobileGestures = () => {};
+let disposePlaybackNotices = () => {};
 import {installDesktopIdle} from './desktop-idle.js';
 let disposeDesktopIdle = () => {};
 import {externalPlayerLink, externalPlaylist} from './external-player.js';
@@ -37,9 +41,8 @@ const StreamList = ref(null);
 const QualityData = ref(null);
 const playInfo = ref(null);
 async function backFromPlayer() {
+  if (exitPlayerFullscreen(art)) return;
   art?.pause();
-  if (art?.fullscreen) art.fullscreen = false;
-  if (art?.fullscreenWeb) art.fullscreenWeb = false;
   const previous = window.history.state?.back;
   if (typeof previous === 'string' && previous.startsWith('/') && !previous.startsWith('//') && !/^\/(player|login)(?:[/?#]|$)/.test(previous)) {
     proxy.$router.back();
@@ -60,9 +63,9 @@ function createPlayerHeading() {
   const back = document.createElement('button');
   back.type = 'button';
   back.className = 'art-back-button';
-  back.setAttribute('aria-label', '返回上一页');
-  back.title = '返回';
-  back.textContent = '‹ 返回';
+  back.setAttribute('aria-label', '返回；全屏时退出全屏');
+  back.title = '返回；全屏时退出全屏';
+  back.innerHTML = backIcon;
   back.addEventListener('click', event => {event.stopPropagation(); void backFromPlayer();});
   const title = document.createElement('span');
   title.className = 'art-title';
@@ -70,6 +73,15 @@ function createPlayerHeading() {
   heading.append(back, title);
   playerHeading = heading;
   return heading;
+}
+
+function mountPlayerHeading(player) {
+  const heading = createPlayerHeading();
+  if (!player.layers.title) player.layers.add({
+    name: 'title', html: heading,
+    style: {position: 'absolute', top: '10px', left: '10px', color: '#fff',
+      fontSize: '16px', backgroundColor: 'transparent', padding: '4px 8px'},
+  });
 }
 
 const showModal = ref(false);
@@ -490,7 +502,8 @@ const setting = ref({
   flip: false,    // 是否显示视频翻转功能，目前只出现在 设置面板 和 右键菜单 里
   playbackRate: false,
   aspectRatio: true,
-  fastForward: true,
+  fastForward: !touchPlayer,
+  gesture: !touchPlayer,
   fullscreen: !touchPlayer,
   fullscreenWeb: !touchPlayer,
   subtitleOffset: false,
@@ -529,6 +542,8 @@ const setting = ref({
   ],
   quality: [],
   icons: {
+    fullscreenOn: fullscreenIcon,
+    fullscreenOff: fullscreenExitIcon,
     loading: '<img width="60" heigth="60" src="./images/loading.gif">',
     state: '<img width="60" heigth="60" src="./images/play2.svg">',
     indicator: '<img width="16" heigth="16" src="./images/indicator.svg">',
@@ -956,10 +971,10 @@ async function UpdateControl(_art) {
   if (qualitySelector.value.length > 0) {
     const qualityControl = {
       disable: false,
-      index: 1,
+      index: touchPlayer ? 2 : 1,
       name: '画质',
       position: 'right',
-      html: currentQuality.value ?
+      html: touchPlayer ? (currentQuality.value?.resolution || '画质') : currentQuality.value ?
           `${currentQuality.value.resolution} (${(currentQuality.value.bitrate / 1000000).toFixed(1)}Mbps)` :
           '画质',
       selector: qualitySelector.value.map(group => ({
@@ -981,39 +996,15 @@ async function UpdateControl(_art) {
     index: 2,
     name: '倍速',
     position: 'right',
-    html: art.playbackRate + 'X',
-    selector: [
-      {
-        html: 0.5,
-      },
-      {
-        html: 0.8,
-      },
-      {
-        html: 1,
-      }, {
-        html: 1.2,
-      }, {
-        html: 1.5,
-      }, {
-        html: 1.8,
-      }, {
-        html: 2,
-      }, {
-        html: 2.5,
-      }, {
-        html: 2.8,
-      }, {
-        html: 3,
-      },
-    ],
+    html: art.playbackRate + '×',
+    selector: [0.5, 0.8, 1, 1.2, 1.5, 1.8, 2, 2.5, 2.8, 3].map(rate => ({rate, html: `${rate}×`})),
     onSelect: function (item, $dom) {
-      art.playbackRate = item.html;
-      return `${item.html}X`;
+      art.playbackRate = item.rate;
+      return `${item.rate}×`;
     },
   }
   倍速.selector.forEach(item => {
-    if (item.html === art.playbackRate) {
+    if (item.rate === art.playbackRate) {
       item.default = true;
     }
   })
@@ -1071,7 +1062,7 @@ async function UpdateControl(_art) {
     let 选集 = {
       disable: false,
       name: '选集',
-      index: 4,
+      index: touchPlayer ? 1 : 4,
       position: 'right',
       html: "选集",
       selector: 选集_selector,
@@ -1086,8 +1077,15 @@ async function UpdateControl(_art) {
 
   for (let item of forData) {
     if (['画质', '倍速', '选集'].includes(item.name)) {
-      await addArtConfig(_art, 'setting', {...item, name: item.name + '设置', tooltip: item.html});
-      if (touchPlayer) item.disable = true;
+      const label = {画质: '清晰度', 倍速: '播放速度', 选集: '选集'}[item.name];
+      await addArtConfig(_art, 'setting', {...item, name: item.name + '设置', html: label,
+        tooltip: item.name === '画质' ? (currentQuality.value?.html || '默认') : item.html,
+        onSelect: async (selection, element, event) => {
+          const value = await item.onSelect(selection, element, event);
+          return item.name === '画质' ? (currentQuality.value?.html || '默认') : value;
+        },
+      });
+      if (touchPlayer) item.disable = item.name === '倍速';
     }
     await addArtConfig(_art, 'controls', item)
   }
@@ -1269,6 +1267,7 @@ async function switchSubtitleUrl({plain = false} = {}) {
 
 
 async function ready() {
+  mountPlayerHeading(art);
   if (timerSendPlayRecord.value !== null) {
     clearInterval(timerSendPlayRecord.value)
   }
@@ -1298,23 +1297,6 @@ async function ready() {
   await UpdateControl(art);
   art.plugins.artplayerPluginDanmuku.reset();
 
-  art.layers.update(
-      {
-        name: "title",
-        html: createPlayerHeading(),
-        style: {
-          position: 'absolute',
-          top: '10px',
-          left: '10px',
-          color: '#fff',
-          fontSize: '16px',
-          backgroundColor: 'transparent',
-          padding: '4px 8px',
-          borderRadius: '4px',
-        }
-      }
-  )
-
 }
 
 const artF = async (data) => {
@@ -1329,7 +1311,11 @@ const artF = async (data) => {
   });
   art.on('ready', ready);
   art.on('video:ratechange', () => {
-    localStorage.playbackRate = art.playbackRate;
+    if (!art.fnosTemporarySpeed) {
+      localStorage.playbackRate = art.playbackRate;
+      const speedSetting = art.setting.find('倍速设置');
+      if (speedSetting) speedSetting.tooltip = `${art.playbackRate}×`;
+    }
   });
   let lastSkipIndex = -1;
   lastDanmuLoadedUntil = -1;
@@ -1465,12 +1451,17 @@ const dynamicInputCreateByUrl = () => {
 }
 
 async function getInstance(_art) {
+  disposeMobileGestures();
+  disposePlaybackNotices();
   disposeDesktopIdle();
   disposeMobileDanmaku();
   disposeMobileFullscreen();
   disposeMobileFullscreen = installMobileFullscreen(_art);
+  mountPlayerHeading(_art);
+  disposePlaybackNotices = installPlaybackNoticeFilter(_art);
   await artF(_art);
   disposeMobileDanmaku = installMobileDanmaku(_art);
+  disposeMobileGestures = installMobileGestures(_art);
   disposeDesktopIdle = installDesktopIdle(_art);
   art = _art;
   art.id = episode_guid.value
@@ -1493,6 +1484,8 @@ onBeforeRouteUpdate(async (to, from) => {
 });
 
 onBeforeRouteLeave((to, from) => {
+  // Browser/system back in web fullscreen exits fullscreen before leaving playback.
+  if (exitPlayerFullscreen(art)) return false;
   if (timerSendPlayRecord.value) {
     clearInterval(timerSendPlayRecord.value)
     timerSendPlayRecord.value = null
@@ -1501,6 +1494,8 @@ onBeforeRouteLeave((to, from) => {
 
 onBeforeUnmount(async () => {
   releaseExternalPlaylist();
+  disposeMobileGestures();
+  disposePlaybackNotices();
   disposeDesktopIdle();
   disposeMobileDanmaku();
   disposeMobileFullscreen();
@@ -1517,7 +1512,10 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-if="loading" class="load"></div>
+  <div v-if="loading" class="player-loading-shell">
+    <button type="button" class="art-back-button player-loading-back" aria-label="返回上一页" @click="backFromPlayer" v-html="backIcon"></button>
+    <div class="load" role="status" aria-label="正在加载影片"></div>
+  </div>
   <div v-else class="content watch-page">
     <n-grid cols="1" item-responsive responsive="screen">
       <n-grid-item span="12 m:12 l:9 xl:9 2xl:9">

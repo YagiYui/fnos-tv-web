@@ -1,3 +1,5 @@
+import {fullscreenIcon} from './player-icons.js';
+
 // Keep the entire player in fullscreen so ASS/PGS and danmaku stay visible.
 export function installMobileFullscreen(art, win = window, doc = document) {
   const player = art.template.$player;
@@ -87,7 +89,7 @@ export function installMobileFullscreen(art, win = window, doc = document) {
     art.fullscreenWeb = true;
   }
   art.controls.add({name: 'mobile-fullscreen', position: 'right', index: 100,
-    html: '<span aria-hidden="true">⛶</span>', tooltip: '横屏全屏 / 退出全屏',
+    html: fullscreenIcon, tooltip: '横屏全屏 / 退出全屏',
     mounted: element => { element.setAttribute('aria-label', '横屏全屏 / 退出全屏'); element.setAttribute('role', 'button'); element.tabIndex = 0;
       art.proxy(element, 'keydown', event => { if (event.key === 'Enter' || event.key === ' ') {event.preventDefault(); void toggle();} }); },
     click: () => { void toggle(); }});

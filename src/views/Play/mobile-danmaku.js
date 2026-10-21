@@ -8,7 +8,9 @@ export function installMobileDanmaku(art, doc = document) {
   const toggle = doc.createElement('button');
   const settings = doc.createElement('button');
   toggle.type = settings.type = 'button';
-  settings.textContent = '弹幕设置';
+  settings.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="9" cy="18" r="2" fill="currentColor"/></svg>';
+  settings.setAttribute('aria-label', '更多播放设置');
+  settings.title = '更多播放设置';
   settings.setAttribute('aria-expanded', 'false');
   const panel = doc.createElement('section');
   panel.className = 'fnos-danmaku-panel';
@@ -18,7 +20,7 @@ export function installMobileDanmaku(art, doc = document) {
   const inputs = [];
   function close() { if (!panel.hidden) art.isInput = false; panel.hidden = true; settings.setAttribute('aria-expanded', 'false'); }
   function sync() {
-    toggle.textContent = plugin.isHide ? '弹幕 关' : '弹幕 开';
+    toggle.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="15" rx="3"/><path d="M7 9h4m3 0h3M7 14h7"/></svg>';
     toggle.setAttribute('aria-label', plugin.isHide ? '打开弹幕' : '关闭弹幕');
     toggle.setAttribute('aria-pressed', String(!plugin.isHide));
     for (const {input, output, key, format} of inputs) {
@@ -72,12 +74,21 @@ export function installMobileDanmaku(art, doc = document) {
   const done = doc.createElement('button'); done.type = 'button'; done.textContent = '完成';
   done.addEventListener('click', () => {close(); settings.focus();}); panel.append(done);
   toggle.addEventListener('click', () => { plugin.config({visible: plugin.isHide}); sync(); });
+  const openPanel = (_item, _element, event) => {
+    event?.stopPropagation();
+    panel.hidden = false;
+    settings.setAttribute('aria-expanded', 'true');
+    sync(); fit(); art.setting.show = false; art.controls.show = true; art.isInput = true;
+  };
+  art.setting.add({name: 'mobile-danmaku-settings', html: '弹幕设置', onClick: openPanel});
   settings.addEventListener('click', () => {
-    panel.hidden = !panel.hidden;
-    settings.setAttribute('aria-expanded', String(!panel.hidden));
-    if (!panel.hidden) { sync(); fit(); art.setting.show = false; art.controls.show = true; art.isInput = true; }
-    else art.isInput = false;
+    close();
+    art.controls.show = true;
+    art.setting.show = !art.setting.show;
+    if (art.setting.show) art.setting.resize();
+    settings.setAttribute('aria-expanded', String(art.setting.show));
   });
+  const settingChanged = visible => settings.setAttribute('aria-expanded', String(visible || !panel.hidden));
   toolbar.addEventListener('click', event => event.stopPropagation());
   toolbar.addEventListener('pointerdown', event => event.stopPropagation());
   toolbar.addEventListener('keydown', event => { if (event.key === 'Escape') {event.stopPropagation();close();settings.focus();} });
@@ -91,6 +102,7 @@ export function installMobileDanmaku(art, doc = document) {
   const outside = event => {if (!toolbar.contains(event.target)) close();};
   art.proxy(player, 'click', outside);
   art.on('control', control);
+  art.on('setting', settingChanged);
   art.on('resize', fit);
   art.on('artplayerPluginDanmuku:config', sync);
   art.on('artplayerPluginDanmuku:show', sync);
@@ -98,9 +110,10 @@ export function installMobileDanmaku(art, doc = document) {
   sync(); fit();
   return () => {
     close();
-    art.off('control', control); art.off('resize', fit);
+    art.off('control', control); art.off('resize', fit); art.off('setting', settingChanged);
     art.off('artplayerPluginDanmuku:config', sync);
     art.off('artplayerPluginDanmuku:show', sync); art.off('artplayerPluginDanmuku:hide', sync);
+    art.setting.remove('mobile-danmaku-settings');
     toolbar.remove();
   };
 }
