@@ -18,7 +18,6 @@ import {errorText} from './compat.js';
 import {applyDocumentTheme, readThemePreference} from './theme.js';
 import './assets/cinema.css';
 import './assets/mobile-player.css';
-import './assets/page-transitions.css';
 
 applyDocumentTheme(readThemePreference(), window.matchMedia('(prefers-color-scheme: dark)').matches);
 

@@ -319,7 +319,7 @@ watch(
                   </div>
                 </div>
               </n-layout-sider>
-              <n-layout :native-scrollbar="false" class="route-content" :class="{ 'mobile-content': isMobile }">
+              <n-layout :native-scrollbar="false" :class="{ 'mobile-content': isMobile }">
                 <PageBack v-if="route.path === '/list'" />
                 <router-view/>
               </n-layout>
