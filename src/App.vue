@@ -3,6 +3,7 @@ import {computed, getCurrentInstance, onMounted, onBeforeUnmount, ref, watch} fr
 import VueCookies from 'vue-cookies';
 import {darkTheme} from "naive-ui";
 import PageBack from './components/PageBack.vue';
+import PageTransition from './components/PageTransition.vue';
 import {isLibraryActive} from './navigation.js';
 import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from './theme.js';
 
@@ -320,12 +321,14 @@ watch(
                 </div>
               </n-layout-sider>
               <n-layout :native-scrollbar="false" :class="{ 'mobile-content': isMobile }">
-                <PageBack v-if="route.path === '/list'" />
-                <router-view/>
+                <PageTransition>
+                  <PageBack v-if="route.path === '/list'" />
+                  <router-view/>
+                </PageTransition>
               </n-layout>
             </n-layout>
           </n-layout>
-          <router-view v-else/>
+          <PageTransition v-else><router-view/></PageTransition>
         </n-dialog-provider>
       </n-notification-provider>
     </n-message-provider>
