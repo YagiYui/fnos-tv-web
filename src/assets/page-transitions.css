@@ -1,0 +1,36 @@
+/* Snapshot only the visible scrolling viewport, never the tall page or navigation chrome. */
+html.page-navigation-transition {
+  view-transition-name: none;
+}
+.route-content {
+  view-transition-name: page-content;
+}
+.watching .route-content {
+  view-transition-name: none;
+}
+::view-transition {
+  pointer-events: none;
+}
+::view-transition-group(page-content) {
+  animation: none;
+}
+::view-transition-old(page-content) {
+  animation: none;
+  opacity: 1;
+  mix-blend-mode: normal;
+}
+::view-transition-new(page-content) {
+  animation: page-dissolve 140ms ease-out both;
+  mix-blend-mode: normal;
+}
+@keyframes page-dissolve {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(page-content),
+  ::view-transition-old(page-content),
+  ::view-transition-new(page-content) {
+    animation: none !important;
+  }
+}

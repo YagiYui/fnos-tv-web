@@ -1,4 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import {nextTick} from 'vue';
+import {installPageTransitions} from '../page-transitions.js';
 const routes = [
 
     {
@@ -34,6 +36,12 @@ const router = createRouter({
     scrollBehavior(to, from, savedPosition) {
         return { x: 0, y: 0 }
     }
+});
+
+installPageTransitions(router, {
+    document,
+    motion: window.matchMedia('(prefers-reduced-motion: reduce)'),
+    nextTick,
 });
 
 router.afterEach((to, from, next) => {
