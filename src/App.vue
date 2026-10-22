@@ -3,6 +3,7 @@ import {computed, getCurrentInstance, onMounted, onBeforeUnmount, ref, watch, pr
 import VueCookies from 'vue-cookies';
 import {darkTheme} from "naive-ui";
 import PageBack from './components/PageBack.vue';
+import AccountMenu from './components/AccountMenu.vue';
 import {isLibraryActive} from './navigation.js';
 import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from './theme.js';
 import {CatalogCache} from './catalog-cache.js';
@@ -30,7 +31,7 @@ const instance = getCurrentInstance();
 const COMMON = instance.appContext.config.globalProperties.$COMMON;
 let UserInfo = ref({})
 const avatarName = computed(() => String(UserInfo.value?.username || '').trim());
-const avatarInitial = computed(() => Array.from(avatarName.value)[0]?.toLocaleUpperCase() || 'U');
+const serviceVersion = ref('');
 let load = ref(true)
 const title = ref(COMMON.title || 'FNOS TV');
 let collapsed = ref(false);
@@ -51,18 +52,13 @@ themeMedia.addEventListener('change', onSystemTheme);
 watch([themePreference, systemDark], () => applyDocumentTheme(themePreference.value, systemDark.value), {immediate: true});
 onBeforeUnmount(() => themeMedia.removeEventListener('change', onSystemTheme));
 const data = ref(null)
+const accountLibraryCount = computed(() => Array.isArray(data.value) ? data.value.filter(item => item.category !== 'Others').length : null);
 const MediaDbSum = ref({})
 const MediaDbInfo = ref({})
 const ConfigData = ref({})
 const route = useRoute();
 const pageLabel = computed(() => ({'/': '首页', '/list': data.value?.find(item => item.guid === route.query.gallery_uid)?.title || '媒体库', '/video': '影片详情', '/player': '正在播放'})[route.path] || '片库');
 const themeOverrides = computed(() => ({common: {primaryColor: dark.value ? '#83b0f1' : '#3978d4', primaryColorHover: dark.value ? '#a4c6f5' : '#4f88da', primaryColorPressed: dark.value ? '#6598dc' : '#2866bb', borderRadius: '8px'}}));
-const options = ref([
-  {
-    label: '注销登录',
-    key: "out"
-  },
-])
 
 if (COMMON.isMo) {
   collapsed.value = true;
@@ -102,6 +98,16 @@ async function getConfig() {
       localStorage.setItem("title", title.value);
     }
   }
+}
+
+async function getServiceVersion() {
+  const result = await COMMON.requests('GET', '/api/v1/sys/version');
+  serviceVersion.value = typeof result?.version === 'string' ? result.version : '';
+}
+
+function clearAccountHistory() {
+  mediaSearch.clearHistory();
+  COMMON.ShowMsg('已清空本账号搜索历史');
 }
 
 async function GetMediaDbList() {
@@ -162,7 +168,12 @@ function handleSelect(key) {
     catalogCache.clear();
     MediaDbData.info = {};
     MediaDbData.errors = {};
+    MediaDbData.list = [];
+    data.value = [];
+    UserInfo.value = {};
+    delete COMMON.userKey;
     VueCookies.remove("authorization");
+    VueCookies.remove("Trim-MC-token");
     COMMON.ShowMsg("注销登录成功！")
     setTimeout(function () {
       location.reload();
@@ -211,6 +222,7 @@ async function onMountedFun() {
 }
 
 onMounted(async () => {
+  void getServiceVersion().catch(() => { serviceVersion.value = ''; });
   await onMountedFun();
 })
 
@@ -263,12 +275,7 @@ watch(
                     </n-button>
                   </n-dropdown>
 
-                  <n-dropdown trigger="hover" placement="bottom-start" :options="options"
-                              @select="handleSelect">
-                    <n-avatar circle size="medium" class="user-avatar" :title="avatarName" :aria-label="avatarName ? '用户：' + avatarName : '用户菜单'">
-                      {{ avatarInitial }}
-                    </n-avatar>
-                  </n-dropdown>
+                  <AccountMenu :username="avatarName" :server-name="title" :library-count="accountLibraryCount" :service-version="serviceVersion" :theme-mode="themePreference" :history-count="mediaSearch.state.history.length" @theme="setThemePreference" @clear-history="clearAccountHistory" @logout="handleSelect('out')" />
                 </n-space>
               </div>
             </n-layout-header>
