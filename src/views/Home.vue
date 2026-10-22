@@ -1,8 +1,10 @@
 <script setup>
 import HomeCarousel from "../components/HomeCarousel.vue";
 import {continuePlaybackRoute} from './Play/player-presentation.js';
-import {useMediaDbData} from '../store'
-import {getCurrentInstance, onMounted, ref, onUnmounted, computed, h} from "vue";
+import {useMediaDbData, useMediaSearch} from '../store'
+import {getCurrentInstance, onMounted, ref, onUnmounted, computed, h, watch, inject, nextTick} from "vue";
+import {onBeforeRouteLeave, RouterLink} from 'vue-router';
+import {groupSearchResults, searchResultRoute} from '../media-search.js';
 import {useMessage, NIcon, NProgress} from 'naive-ui'
 
 const MediaDbData = useMediaDbData()
@@ -13,17 +15,37 @@ const per_card = ref(window.innerWidth <= 768 ? 3 : 7);
 const instance = getCurrentInstance();
 const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
-const keyword = ref('');
+const mediaSearch = useMediaSearch();
+const search = mediaSearch.state;
+const keyword = ref(search.query);
+const pageScroll = inject('pageScroll', {getTop: () => window.scrollY, scrollTo: top => window.scrollTo(0, top)});
+const searchGroups = computed(() => groupSearchResults(search.items, search.limit));
+const hasMoreSearchResults = computed(() => searchGroups.value.some(group => group.total > group.items.length));
 const visibleLibraries = computed(() => (MediaDbData.list || []).filter(item => item.category !== 'Others'));
 const catalogKeys = computed(() => [...new Set([...Object.keys(MediaDbData.info), ...Object.keys(MediaDbData.errors || {})])]);
 const libraryInfo = key => (MediaDbData.list || []).find(item => item.guid === key);
 const libraryRoute = item => ({path: '/list', query: {gallery_uid: item.guid, gallery_type: item.category}});
 
 function filteredItems(key) {
-  const needle = keyword.value.trim().toLowerCase();
-  return (MediaDbData.info[key]?.list || []).filter(item => !needle || (item.title || item.name || '').toLowerCase().includes(needle));
+  return MediaDbData.info[key]?.list || [];
 }
-const hasSearchResults = computed(() => Object.keys(MediaDbData.info).some(key => filteredItems(key).length));
+async function submitSearch(event) {
+  if (event?.isComposing) return;
+  pageScroll.scrollTo(0);
+  await mediaSearch.submit(COMMON.requests, keyword.value);
+}
+function clearSearch() {
+  keyword.value = '';
+  mediaSearch.clear();
+  pageScroll.scrollTo(0);
+}
+function searchHistory(value) { keyword.value = value; return submitSearch(); }
+watch(keyword, value => { if (!value.trim() && search.query) clearSearch(); });
+watch(() => search.query, value => { if (!value) keyword.value = ''; });
+onBeforeRouteLeave(() => {
+  search.scrollY = pageScroll.getTop();
+  mediaSearch.cancel();
+});
 const playList = ref(null)
 const play_item_guid = ref(null);
 const showDropdown = ref(false)
@@ -105,13 +127,19 @@ async function GetPlayList() {
 }
 
 onMounted(async () => {
-  await GetPlayList();
   // 添加全局点击事件监听
   document.addEventListener('click', handleClickOutside)
+  if (search.query) {
+    if (search.status === 'idle') void mediaSearch.submit(COMMON.requests, search.query);
+    await nextTick();
+    pageScroll.scrollTo(search.scrollY);
+  }
+  try { await GetPlayList(); } catch (error) { message.error(error?.message || '继续观看加载失败'); }
 })
 
 // 组件卸载时移除事件监听
 onUnmounted(() => {
+  mediaSearch.cancel();
   window.removeEventListener('resize', updateCarouselLayout);
   document.removeEventListener('click', handleClickOutside)
 })
@@ -121,17 +149,42 @@ onUnmounted(() => {
   <div class="content cinema-home">
     <div class="library-toolbar">
       <div><h1>首页</h1><p class="page-description">继续观看与媒体库</p></div>
-      <n-input v-model:value="keyword" class="catalog-search" clearable placeholder="搜索已载入影片" aria-label="搜索已载入影片">
+      <n-input v-model:value="keyword" class="catalog-search" clearable placeholder="搜索全库，回车提交" aria-label="搜索全库" @keydown.enter="submitSearch" @clear="clearSearch">
         <template #prefix><i class="bx bx-search"></i></template>
+        <template #suffix><n-button text :disabled="!keyword.trim()" aria-label="提交全库搜索" @click="submitSearch"><i class="bx bx-right-arrow-alt"></i></n-button></template>
       </n-input>
+    </div>
+    <section v-if="search.query" class="search-results" aria-label="搜索结果" :aria-busy="search.status === 'loading'">
+      <div class="section-heading"><h2>“{{ search.query }}” 的搜索结果</h2><n-button text @click="clearSearch">返回首页</n-button></div>
+      <p v-if="search.status === 'loading'" role="status">正在搜索…</p>
+      <n-alert v-else-if="search.status === 'error'" type="error">{{ search.error }} <n-button text @click="mediaSearch.submit(COMMON.requests, search.query)">重试</n-button></n-alert>
+      <n-empty v-else-if="search.status === 'success' && !search.items.length" description="没有找到匹配的影片" class="catalog-empty" />
+      <p v-if="search.status === 'success' && search.items.length" class="page-description">服务器返回 {{ search.items.length }} 项结果</p>
+      <section v-for="group in searchGroups" :key="group.key" class="card-shows search-group">
+        <div class="section-heading"><h2>{{ group.title }}</h2><span>{{ group.total }} 项</span></div>
+        <div class="card-show-content view-card-list">
+          <div v-for="item in group.items" :key="item.guid" class="view-item poster-card">
+            <component :is="searchResultRoute(item) ? RouterLink : 'div'" :to="searchResultRoute(item) || undefined" class="search-result-link">
+              <div class="poster-art"><img v-lazy="item.poster ? COMMON.imgUrl + item.poster : '/images/not_video.jpg'" :alt="item.title" loading="lazy"><span v-if="searchResultRoute(item)" class="poster-play"><i class="bx bx-play"></i></span><span v-if="Number(item.vote_average) > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="Number(item.watched) > 0" class="poster-watched"><i class="bx bx-check"></i></span></div>
+              <div class="view-item-title">{{ item.title }}</div>
+              <div class="poster-caption">{{ item.ancestor_name }}<span v-if="item.release_date"> · {{ String(item.release_date).slice(0, 4) }}</span></div>
+              <div v-if="!searchResultRoute(item)" class="poster-caption">{{ item.type }}：暂不支持打开此类型</div>
+            </component>
+          </div>
+        </div>
+      </section>
+      <div v-if="hasMoreSearchResults" class="catalog-pagination"><n-button secondary @click="mediaSearch.showMore()">显示更多结果</n-button></div>
+    </section>
+    <template v-else>
+    <div v-if="search.history.length" class="search-history" aria-label="搜索历史">
+      <span>搜索历史</span><n-button v-for="value in search.history" :key="value" text @click="searchHistory(value)">{{ value }}</n-button><n-button text @click="mediaSearch.clearHistory()">清空历史</n-button>
     </div>
     <nav class="library-shortcuts" aria-label="媒体库">
       <router-link v-for="item in visibleLibraries" :key="item.guid" :to="libraryRoute(item)" class="library-shortcut">
         <i class="bx" :class="item.category === 'Movie' ? 'bx-film' : 'bx-tv'"></i><span>{{ item.title }}</span><i class="bx bx-chevron-right"></i>
       </router-link>
     </nav>
-    <n-empty v-if="keyword && !hasSearchResults" description="没有找到匹配的已载入影片" class="catalog-empty" />
-    <section class="card-shows continue-section" v-if="playList?.length && !keyword">
+    <section class="card-shows continue-section" v-if="playList?.length">
       <div class="section-heading"><h2>继续观看</h2></div>
       <HomeCarousel :items="playList" :per-view="per_view" :mobile="isMobile">
         <template #default="{item}">
@@ -162,6 +215,7 @@ onUnmounted(() => {
         </template>
       </HomeCarousel>
       </section>
+    </template>
     </template>
     <n-dropdown
         :show="showDropdown"

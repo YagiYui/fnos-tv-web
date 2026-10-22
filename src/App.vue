@@ -1,5 +1,5 @@
 <script setup>
-import {computed, getCurrentInstance, onMounted, onBeforeUnmount, ref, watch} from 'vue'
+import {computed, getCurrentInstance, onMounted, onBeforeUnmount, ref, watch, provide} from 'vue'
 import VueCookies from 'vue-cookies';
 import {darkTheme} from "naive-ui";
 import PageBack from './components/PageBack.vue';
@@ -7,10 +7,18 @@ import {isLibraryActive} from './navigation.js';
 import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from './theme.js';
 import {CatalogCache} from './catalog-cache.js';
 
-import {useMediaDbData} from './store.js'
+import {useMediaDbData, useMediaSearch} from './store.js'
 import {useRoute} from "vue-router";
 
 const MediaDbData = useMediaDbData()
+const mediaSearch = useMediaSearch();
+const contentLayout = ref(null);
+let contentScrollTop = 0;
+const pageScroll = {
+  getTop: () => contentScrollTop,
+  scrollTo: top => { contentScrollTop = top; contentLayout.value?.scrollTo({top, behavior: 'instant'}); }
+};
+provide('pageScroll', pageScroll);
 const catalogCache = new CatalogCache();
 let initialization = null;
 let initializedAccount = null;
@@ -150,6 +158,7 @@ function toggDark() {
 
 function handleSelect(key) {
   if (key === "out") {
+    mediaSearch.setAccount('');
     catalogCache.clear();
     MediaDbData.info = {};
     MediaDbData.errors = {};
@@ -178,6 +187,7 @@ async function onMountedFun() {
       const account = UserInfo.value?.guid || UserInfo.value?.uid || UserInfo.value?.username;
       if (!account) throw new Error('未获取到有效的用户信息');
       COMMON.userKey = String(account);
+      mediaSearch.setAccount(account);
       const accountChanged = account !== initializedAccount;
       if (accountChanged) {
         catalogCache.clear();
@@ -208,7 +218,10 @@ onMounted(async () => {
 watch(
     () => route.fullPath,
     async (newPath, oldPath) => {
+      pageScroll.scrollTo(0);
       if (route.path === '/login') {
+        mediaSearch.setAccount('');
+        delete COMMON.userKey;
         catalogCache.clear(); initializedAccount = null;
         MediaDbData.info = {}; MediaDbData.errors = {}; MediaDbData.list = [];
       }
@@ -323,7 +336,7 @@ watch(
                   </div>
                 </div>
               </n-layout-sider>
-              <n-layout :native-scrollbar="false" :class="{ 'mobile-content': isMobile }">
+              <n-layout ref="contentLayout" :native-scrollbar="false" :class="{ 'mobile-content': isMobile }" @scroll="contentScrollTop = $event.target.scrollTop">
                 <PageBack v-if="route.path === '/list'" />
                 <router-view/>
               </n-layout>

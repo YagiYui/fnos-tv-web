@@ -25,3 +25,5 @@ html,body,#app{min-height:100%;background:var(--cinema-bg);color:var(--cinema-te
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
 .library-shortcut>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.search-history{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;margin:0 0 24px;font-size:12px;color:var(--cinema-muted)}.search-history .n-button{max-width:100%;white-space:normal;overflow-wrap:anywhere}.search-group{margin-top:24px!important}.search-result-link{display:block}.search-results>.section-heading h2{overflow-wrap:anywhere;min-width:0}
