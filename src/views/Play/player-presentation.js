@@ -21,6 +21,16 @@ export function playbackSelection(query) {
   };
 }
 
+// A missing episode ends this season; never jump over a gap or guess another season.
+export function nextEpisode(episodes, current, category) {
+  if (category === 'Movie' || !Array.isArray(episodes)) return null;
+  const number = Number(current?.episode_number);
+  if (current?.episode_number == null || !Number.isFinite(number)) return null;
+  return episodes.find(item => item.guid && Number(item.episode_number) === number + 1
+    && (current?.season_number == null || item.season_number == null
+      || Number(item.season_number) === Number(current.season_number))) || null;
+}
+
 export function mediaDetailTitle(info = {}, category = '') {
   const valid = value => typeof value === 'string' && value.trim() ? value.trim() : '';
   const title = valid(info.title);
