@@ -1,5 +1,6 @@
 <script setup>
 import HomeCarousel from "../components/HomeCarousel.vue";
+import VisibleSection from '../components/VisibleSection.vue';
 import {continuePlaybackRoute} from './Play/player-presentation.js';
 import {useMediaDbData, useMediaSearch} from '../store'
 import {getCurrentInstance, onMounted, ref, onUnmounted, computed, h, watch, inject, nextTick} from "vue";
@@ -19,11 +20,11 @@ const mediaSearch = useMediaSearch();
 const search = mediaSearch.state;
 const keyword = ref(search.query);
 const pageScroll = inject('pageScroll', {getTop: () => window.scrollY, scrollTo: top => window.scrollTo(0, top)});
+const loadHomeLibrary = inject('loadHomeLibrary', () => {});
+const cancelHomeLibraries = inject('cancelHomeLibraries', () => {});
 const searchGroups = computed(() => groupSearchResults(search.items, search.limit));
 const hasMoreSearchResults = computed(() => searchGroups.value.some(group => group.total > group.items.length));
 const visibleLibraries = computed(() => (MediaDbData.list || []).filter(item => item.category !== 'Others'));
-const catalogKeys = computed(() => [...new Set([...Object.keys(MediaDbData.info), ...Object.keys(MediaDbData.errors || {})])]);
-const libraryInfo = key => (MediaDbData.list || []).find(item => item.guid === key);
 const libraryRoute = item => ({path: '/list', query: {gallery_uid: item.guid, gallery_type: item.category}});
 
 function filteredItems(key) {
@@ -41,10 +42,11 @@ function clearSearch() {
 }
 function searchHistory(value) { keyword.value = value; return submitSearch(); }
 watch(keyword, value => { if (!value.trim() && search.query) clearSearch(); });
-watch(() => search.query, value => { if (!value) keyword.value = ''; });
+watch(() => search.query, value => { if (!value) keyword.value = ''; else cancelHomeLibraries(); });
 onBeforeRouteLeave(() => {
   search.scrollY = pageScroll.getTop();
   mediaSearch.cancel();
+  cancelHomeLibraries();
 });
 const playList = ref(null)
 const play_item_guid = ref(null);
@@ -140,6 +142,7 @@ onMounted(async () => {
 // 组件卸载时移除事件监听
 onUnmounted(() => {
   mediaSearch.cancel();
+  cancelHomeLibraries();
   window.removeEventListener('resize', updateCarouselLayout);
   document.removeEventListener('click', handleClickOutside)
 })
@@ -200,11 +203,10 @@ onUnmounted(() => {
       </template>
       </HomeCarousel>
     </section>
-    <template v-for="key in catalogKeys" :key="key">
-      <n-alert v-if="MediaDbData.errors?.[key]" type="error">{{ libraryInfo(key)?.title }}：{{ MediaDbData.errors[key] }}</n-alert>
-      <section class="card-shows" v-if="libraryInfo(key)?.category !== 'Others' && filteredItems(key).length">
-        <div class="section-heading"><h2>{{ libraryInfo(key)?.title || '媒体库' }}</h2><router-link v-if="libraryInfo(key)" :to="libraryRoute(libraryInfo(key))" class="section-more">查看全部 <i class="bx bx-chevron-right"></i></router-link></div>
-        <HomeCarousel :items="filteredItems(key)" :per-view="per_card" :mobile="isMobile">
+    <VisibleSection v-for="library in visibleLibraries" :key="library.guid" class="card-shows" :aria-busy="Boolean(MediaDbData.loading?.[library.guid])" @visible="loadHomeLibrary(library.guid)">
+        <div class="section-heading"><h2>{{ library.title }}</h2><router-link :to="libraryRoute(library)" class="section-more">查看全部 <i class="bx bx-chevron-right"></i></router-link></div>
+        <n-alert v-if="MediaDbData.errors?.[library.guid]" type="error">{{ MediaDbData.errors[library.guid] }} <n-button text :loading="Boolean(MediaDbData.loading?.[library.guid])" @click="loadHomeLibrary(library.guid, true)">重试</n-button></n-alert>
+        <HomeCarousel v-else-if="filteredItems(library.guid).length" :items="filteredItems(library.guid)" :per-view="per_card" :mobile="isMobile">
           <template #default="{item}">
           <div class="view-item poster-card">
             <router-link :to="{path: '/video', query: {guid: item.guid, gallery_type: item.type}}">
@@ -214,8 +216,9 @@ onUnmounted(() => {
           </div>
         </template>
       </HomeCarousel>
-      </section>
-    </template>
+      <n-empty v-else-if="MediaDbData.info[library.guid]" description="当前媒体库暂无影片" />
+      <div v-else class="home-library-placeholder" :style="{'--home-columns': per_card}" aria-hidden="true"><div v-for="slot in per_card" :key="slot"><n-skeleton class="poster-art" /><n-skeleton text /></div></div>
+    </VisibleSection>
     </template>
     <n-dropdown
         :show="showDropdown"
@@ -228,3 +231,8 @@ onUnmounted(() => {
     />
   </div>
 </template>
+
+<style scoped>
+.home-library-placeholder{display:grid;grid-template-columns:repeat(var(--home-columns),minmax(0,1fr));gap:18px}
+.home-library-placeholder :deep(.poster-art){height:auto;aspect-ratio:2/3}.home-library-placeholder :deep(.n-skeleton--text){margin-top:10px}
+</style>

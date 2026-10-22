@@ -8,11 +8,12 @@ import {isLibraryActive} from './navigation.js';
 import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from './theme.js';
 import {CatalogCache} from './catalog-cache.js';
 
-import {useMediaDbData, useMediaSearch} from './store.js'
+import {useMediaDbData, useMediaSearch, useLibraryViews} from './store.js'
 import {useRoute} from "vue-router";
 
 const MediaDbData = useMediaDbData()
 const mediaSearch = useMediaSearch();
+const libraryViews = useLibraryViews();
 const contentLayout = ref(null);
 let contentScrollTop = 0;
 const pageScroll = {
@@ -21,10 +22,13 @@ const pageScroll = {
 };
 provide('pageScroll', pageScroll);
 const catalogCache = new CatalogCache();
+const homeLoads = new Map();
 let initialization = null;
 let initializedAccount = null;
 let metadataUpdated = 0;
 onBeforeUnmount(() => catalogCache.clear());
+provide('loadHomeLibrary', loadHomeLibrary);
+provide('cancelHomeLibraries', () => catalogCache.cancel());
 
 // 获取 Vue 实例
 const instance = getCurrentInstance();
@@ -111,27 +115,45 @@ function clearAccountHistory() {
 }
 
 async function GetMediaDbList() {
+  const account = initializedAccount;
   let api = '/api/v1/mediadb/list'
-  data.value = await COMMON.requests("GET", api, true);
+  const result = await COMMON.requests("GET", api, true);
+  if (account !== initializedAccount) return;
+  data.value = result;
   MediaDbData.list = data.value
 }
 
 async function GetMediaDbSum() {
+  const account = initializedAccount;
   let api = '/api/v1/mediadb/sum'
-  MediaDbSum.value = await COMMON.requests("GET", api, true);
+  const result = await COMMON.requests("GET", api, true);
+  if (account === initializedAccount) MediaDbSum.value = result;
 }
 
-async function GetMediaDbInfos() {
-  await catalogCache.load(data.value, {
-    account: initializedAccount,
+async function loadHomeLibrary(guid, force = false) {
+  const account = initializedAccount;
+  const library = data.value?.find(item => item.guid === guid && item.category !== 'Others');
+  if (!account || !library || route.path !== '/' || mediaSearch.state.query) return;
+  const lease = Symbol();
+  homeLoads.set(guid, lease);
+  MediaDbData.loading[guid] = true;
+  try { await catalogCache.load([library], {
+    account,
     sortColumn: MediaDbData.sort_column, sortType: MediaDbData.sort_type,
     request: (payload, signal) => COMMON.requests('POST', '/api/v1/item/list', true, payload, {signal}),
     onData: (guid, result) => {
+      if (account !== initializedAccount) return;
       MediaDbData.info[guid] = result;
       delete MediaDbData.errors[guid];
     },
-    onError: (guid, error) => { MediaDbData.errors[guid] = error?.message || '媒体库加载失败，请进入媒体库重试'; }
-  });
+    onError: (guid, error) => { if (account === initializedAccount) MediaDbData.errors[guid] = error?.message || '媒体库加载失败，请重试'; },
+    force
+  }); } finally {
+    if (homeLoads.get(guid) === lease) {
+      homeLoads.delete(guid);
+      if (account === initializedAccount) MediaDbData.loading[guid] = false;
+    }
+  }
 }
 
 
@@ -165,9 +187,13 @@ function toggDark() {
 function handleSelect(key) {
   if (key === "out") {
     mediaSearch.setAccount('');
+    libraryViews.setAccount('');
+    initializedAccount = null;
     catalogCache.clear();
+    homeLoads.clear();
     MediaDbData.info = {};
     MediaDbData.errors = {};
+    MediaDbData.loading = {};
     MediaDbData.list = [];
     data.value = [];
     UserInfo.value = {};
@@ -199,19 +225,22 @@ async function onMountedFun() {
       if (!account) throw new Error('未获取到有效的用户信息');
       COMMON.userKey = String(account);
       mediaSearch.setAccount(account);
+      libraryViews.setAccount(account);
       const accountChanged = account !== initializedAccount;
       if (accountChanged) {
         catalogCache.clear();
-        MediaDbData.info = {}; MediaDbData.errors = {};
+        homeLoads.clear();
+        MediaDbData.info = {}; MediaDbData.errors = {}; MediaDbData.loading = {};
+        data.value = null; MediaDbData.list = []; MediaDbSum.value = {};
       }
+      initializedAccount = account;
       if (accountChanged || Date.now() - metadataUpdated > 60000) {
-        await Promise.all([GetMediaDbSum(), GetMediaDbList()]);
-        if (route.path === '/login') return;
-        initializedAccount = account;
+        await GetMediaDbList();
+        if (route.path === '/login' || account !== initializedAccount) return;
         metadataUpdated = Date.now();
+        void GetMediaDbSum().catch(() => {});
       }
       load.value = false;
-      await GetMediaDbInfos();
     } catch (error) {
       COMMON.ShowMsg(error?.message || '加载失败，请刷新重试');
     } finally {
@@ -233,9 +262,11 @@ watch(
       pageScroll.scrollTo(0);
       if (route.path === '/login') {
         mediaSearch.setAccount('');
+        libraryViews.setAccount('');
         delete COMMON.userKey;
         catalogCache.clear(); initializedAccount = null;
-        MediaDbData.info = {}; MediaDbData.errors = {}; MediaDbData.list = [];
+        homeLoads.clear();
+        MediaDbData.info = {}; MediaDbData.errors = {}; MediaDbData.loading = {}; MediaDbData.list = [];
       }
       if (newPath === "/") {
         await onMountedFun();
