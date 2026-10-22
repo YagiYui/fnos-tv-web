@@ -7,9 +7,11 @@ export function chooseAudio(tracks, savedGuid, preferredLanguage) {
 
 export function audioLabel(track) {
   if (!track) return '无音轨';
-  return [track.language || '未知语言', track.title, track.codec_name?.toUpperCase(),
+  const text = [track.language || '未知语言', track.title, track.codec_name?.toUpperCase(),
     track.channel_layout || (track.channels ? `${track.channels} 声道` : ''),
     Number(track.is_default) === 1 ? '默认' : ''].filter(Boolean).join(' · ');
+  // ArtPlayer settings interpret their labels as HTML.
+  return text.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
 
 export function readPlayerPreference(storage, account, key, fallback) {

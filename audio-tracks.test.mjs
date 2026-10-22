@@ -11,6 +11,7 @@ assert.equal(chooseAudio(tracks,null,'unknown').guid,'zh');
 assert.equal(chooseAudio([],null,''),null);
 assert.match(audioLabel(tracks[1]),/zho.*AC3.*6.*默认/);
 assert.equal(audioLabel(null),'无音轨');
+assert.equal(audioLabel({title:'<img onerror="bad">'}).includes('<img'),false);
 const data = new Map();const storage={getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value)};
 writePlayerPreference(storage,'one','audioLanguage','zho');
 assert.equal(readPlayerPreference(storage,'one','audioLanguage',''),'zho');
