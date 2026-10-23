@@ -12,7 +12,7 @@ import axios from "axios";
 import {createBlobVTTUrl, SegmentedSubtitleLoader, subtitleOptions, bindSubtitleTrack, subtitleSearchResults, downloadSubtitle, isPgsSubtitle, streamSubtitleGuid} from "./subtitle.js"
 import {episodeDanmaku, errorText} from '../../compat.js';
 import {SubtitleOverlay, waitForAssSubtitle} from './ass-renderer.js';
-import {playbackTitle, playbackSelection, nextEpisode} from './player-presentation.js';
+import {playbackTitle, playbackSelection, nextEpisode, previousEpisode} from './player-presentation.js';
 import {renderDanmaku} from './danmaku-renderer.js';
 import {PlaybackSession, createProgressReporter} from './playback-session.js';
 import {loadPlaybackMetadata, primaryMediaFile} from './playback-metadata.js';
@@ -1027,6 +1027,24 @@ async function addArtConfig(_art, key, v) {
   _art[key].add(v)
 }
 
+async function addEpisodeNavigation(player, controls) {
+  for (const [direction, name, index, findEpisode] of [[-1, '上一集', 10, previousEpisode], [1, '下一集', 11, nextEpisode]]) {
+    const enabled = Boolean(findEpisode(EpisodeList.value, playInfo.value, gallery_type.value));
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.disabled = !enabled;
+    button.setAttribute('aria-label', name);
+    button.style.cssText = 'display:flex;align-items:center;justify-content:center;border:0;padding:0;background:transparent;color:inherit;cursor:inherit';
+    button.innerHTML = `<img width="22" height="22" alt="" src="./images/next.svg" style="transform:rotate(${direction === -1 ? 180 : 0}deg)">`;
+    const activate = () => enabled ? playAdjacent(direction) : undefined;
+    controls.push({name, position: 'left', index, html: button, tooltip: name,
+      style: {opacity: enabled ? '1' : '0.35', pointerEvents: enabled ? '' : 'none'}, click: activate});
+    await addArtConfig(player, 'setting', {name: name + '设置', html: name, tooltip: enabled ? '' : '没有' + name,
+      onClick: async () => { if (!enabled) return '没有' + name; player.setting.show = false; await activate(); return ''; },
+      mounted: element => { element.setAttribute('aria-disabled', String(!enabled)); element.style.opacity = enabled ? '1' : '0.35'; }});
+  }
+}
+
 async function UpdateControl(_art) {
   let forData = []
 
@@ -1096,21 +1114,7 @@ async function UpdateControl(_art) {
   }
 
   if (EpisodeList.value !== null && EpisodeList.value.length > 0) {
-    let 下一集 = {
-      name: '下一集',
-      position: 'left',
-      index: 11,
-      html: '<img width="22" heigth="22" src="./images/next.svg">',
-      tooltip: '下一集',
-      style: {
-        opacity: nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value) ? '1' : '0.35',
-        pointerEvents: nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value) ? '' : 'none',
-      },
-      click: function () {
-        play_next()
-      }
-    }
-    forData.push(下一集)
+    await addEpisodeNavigation(_art, forData);
 
     let 选集_selector = []
     for (let item of EpisodeList.value) {
@@ -1304,13 +1308,13 @@ async function play() {
   }
 }
 
-let nextEpisodeBusy = false;
-async function play_next() {
-  if (nextEpisodeBusy) return;
-  const episode = nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value);
+let episodeSwitchBusy = false;
+async function playAdjacent(direction) {
+  if (episodeSwitchBusy) return;
+  const episode = (direction === -1 ? previousEpisode : nextEpisode)(EpisodeList.value, playInfo.value, gallery_type.value);
   if (!episode) return;
   const previous = episode_guid.value;
-  nextEpisodeBusy = true;
+  episodeSwitchBusy = true;
   try {
     void SendPlayRecord();
     episode_guid.value = episode.guid;
@@ -1318,12 +1322,14 @@ async function play_next() {
   } catch (error) {
     if (error.name !== 'AbortError' && error.name !== 'CanceledError') {
       if (episode_guid.value === episode.guid) episode_guid.value = previous;
-      COMMON.ShowMsg('切换下一集失败：' + errorText(error));
+      COMMON.ShowMsg(`切换${direction === -1 ? '上一集' : '下一集'}失败：` + errorText(error));
     }
   } finally {
-    nextEpisodeBusy = false;
+    episodeSwitchBusy = false;
   }
 }
+function play_next() { return playAdjacent(1); }
+function play_previous() { return playAdjacent(-1); }
 
 async function switchSubtitleUrl({plain = false} = {}) {
   if (!currentSubtitle.value || !urlBase.value) return;

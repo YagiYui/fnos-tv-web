@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import {loadPlaybackMetadata, primaryMediaFile} from './src/views/Play/playback-metadata.js';
 import {PlaybackSession} from './src/views/Play/playback-session.js';
 import {chooseAudio} from './src/views/Play/audio-tracks.js';
-import {nextEpisode} from './src/views/Play/player-presentation.js';
+import {nextEpisode, previousEpisode} from './src/views/Play/player-presentation.js';
 
 const settle = () => new Promise(setImmediate);
 const info = id => ({item: {guid: id, episode_number: id === 'one' ? 1 : 2, watched_ts: 17, audio_guid: 'zh', subtitle_guid: 'sub'}});
@@ -60,7 +60,7 @@ rejected = assert.rejects(pending, /画质/); api.calls[1].resolve(streams); awa
 const source = fs.readFileSync(new URL('./src/views/Play/VideoPlayer.vue', import.meta.url), 'utf8');
 function player() {
   const api = requestsFixture(), events = [], notices = [];
-  const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, AbortController,
+  const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController,
     playbackSession: new PlaybackSession(), subtitleSwitchGeneration: 0, danmakuLoadGeneration: 0, subtitleSearchGeneration: 0,
     autoplayCountdown: {cancel() {}}, timerSendPlayRecord: {value: null}, clearInterval() {},
     guid: {value: 'season'}, episode_guid: {value: 'one'}, gallery_type: {value: 'TV'},

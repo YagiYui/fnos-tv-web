@@ -23,10 +23,18 @@ export function playbackSelection(query) {
 
 // A missing episode ends this season; never jump over a gap or guess another season.
 export function nextEpisode(episodes, current, category) {
+  return adjacentEpisode(episodes, current, category, 1);
+}
+
+export function previousEpisode(episodes, current, category) {
+  return adjacentEpisode(episodes, current, category, -1);
+}
+
+function adjacentEpisode(episodes, current, category, direction) {
   if (category === 'Movie' || !Array.isArray(episodes)) return null;
   const number = Number(current?.episode_number);
-  if (current?.episode_number == null || !Number.isFinite(number)) return null;
-  return episodes.find(item => item.guid && Number(item.episode_number) === number + 1
+  if (current?.episode_number == null || !Number.isFinite(number) || number + direction < 1) return null;
+  return episodes.find(item => item.guid && Number(item.episode_number) === number + direction
     && (current?.season_number == null || item.season_number == null
       || Number(item.season_number) === Number(current.season_number))) || null;
 }
