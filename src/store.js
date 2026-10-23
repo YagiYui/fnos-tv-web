@@ -3,6 +3,14 @@ import {defineStore} from 'pinia'
 import {ref, reactive} from 'vue'
 import {MediaSearch, createSearchState} from './media-search.js'
 import {LibraryViews} from './library-views.js'
+import {BrowseSnapshots} from './browse-snapshots.js'
+
+export const useBrowseSnapshots = defineStore('BrowseSnapshots', () => {
+    const snapshots = new BrowseSnapshots();
+    const revision = ref(0);
+    return {revision, setAccount: value => { snapshots.setAccount(value); revision.value = snapshots.revision; },
+        get: (user, key) => snapshots.get(user, key), save: (user, key, value, version) => snapshots.save(user, key, value, version)};
+})
 
 export const useLibraryViews = defineStore('LibraryViews', () => {
     const views = new LibraryViews();

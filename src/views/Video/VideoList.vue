@@ -1,4 +1,5 @@
 <script setup>
+import MediaImage from "../../components/MediaImage.vue";
 // 获取 Vue 实例
 import {getCurrentInstance, onMounted, onBeforeUnmount, ref, computed, watch, inject, nextTick} from "vue";
 import {useMediaDbData, useLibraryViews} from '@/store.js'
@@ -196,7 +197,7 @@ onMounted(async () => { await loadLibrary(proxy.$route.query.gallery_uid); });
                         gallery_type: item.type
                     }
                 }">
-          <div class="poster-art"><img v-lazy="item.poster ? COMMON.imgUrl + '/92/17/' + item.poster + '?w=300' : '/images/not_video.jpg'" :alt="item.title || item.name" loading="lazy"><span class="poster-play"><i class="bx bx-play"></i></span><span v-if="item.played" class="poster-watched"><i class="bx bx-check"></i></span><span v-if="item.vote_average > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span></div>
+          <div class="poster-art"><MediaImage :src="item.poster ? COMMON.imgUrl + '/92/17/' + item.poster + '?w=300' : '/images/not_video.jpg'" :alt="item.title || item.name" loading="lazy" /><span class="poster-play"><i class="bx bx-play"></i></span><span v-if="item.played" class="poster-watched"><i class="bx bx-check"></i></span><span v-if="item.vote_average > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span></div>
           <div class="view-item-title">
             {{ item.title || item.name }}
           </div>

@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {ref, computed, watch, reactive, nextTick, h, effectScope} from 'vue';
 import {MediaSearch, createSearchState, groupSearchResults, searchResultRoute} from './src/media-search.js';
+import {BrowseSnapshots} from './src/browse-snapshots.js';
+const snapshots = new BrowseSnapshots(); snapshots.setAccount('fixture-viewer');
 
 const engine = new MediaSearch({state: reactive(createSearchState())});
 engine.setAccount('fixture-viewer');
@@ -10,7 +12,7 @@ const store = {state: engine.state, submit: (...args) => engine.submit(...args),
   clear: () => engine.clear(), clearHistory: () => engine.clearHistory(), showMore: () => engine.showMore()};
 const items = [{guid: 'outside-home', type: 'Movie', title: '首页没有加载的影片'}];
 const calls = [];
-const COMMON = {requests: async (method, uri, ...args) => {
+const COMMON = {userKey: 'fixture-viewer', requests: async (method, uri, ...args) => {
   calls.push(uri);
   return uri === '/api/v1/play/list' ? [] : items;
 }};
@@ -20,7 +22,8 @@ const source = fs.readFileSync(new URL('./src/views/Home.vue', import.meta.url),
 function mountHome() {
   let mounted, leave, unmounted;
   const scope = effectScope();
-  const context = vm.createContext({ref, computed, watch, nextTick, h, RouterLink: {}, groupSearchResults, searchResultRoute,
+  const context = vm.createContext({ref, computed, watch, nextTick, h, AbortController, RouterLink: {}, groupSearchResults, searchResultRoute,
+    useBrowseSnapshots: () => snapshots,
     inject: key => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : () => {},
     useMediaSearch: () => store, useMediaDbData: () => ({list: [], info: {}, errors: {}}),
     getCurrentInstance: () => ({appContext: {config: {globalProperties: {$COMMON: COMMON}}}}),

@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import {ref, reactive} from 'vue';
 import {CatalogCache} from './src/catalog-cache.js';
 import {LibraryViews} from './src/library-views.js';
+import {BrowseSnapshots} from './src/browse-snapshots.js';
 
 const source = fs.readFileSync(new URL('./src/App.vue', import.meta.url), 'utf8');
 const libraryList = ['first', 'second', 'offscreen'].map(guid => ({guid, category: 'Movie'}));
@@ -19,6 +20,7 @@ const COMMON = {requests: async (method, uri, auth, payload, options) => {
 const search = {state: {query: ''}, setAccount() {}};
 const context = vm.createContext({ref, COMMON, data, MediaDbData: media, initializedAccount: null,
   catalogCache: cache, homeLoads: new Map(), mediaSearch: search, libraryViews: new LibraryViews(),
+  browseSnapshots: new BrowseSnapshots(),
   route: {path: '/'}, UserInfo: ref({guid: 'viewer-one'}), VueCookies: {get: () => true}, MediaDbSum: ref({}),
   title: ref('示例服务器'), document: {title: ''}, initialization: null, metadataUpdated: 0, load: ref(true),
   getConfig: async () => {}, GetUserInfo: async () => {}, GetMediaDbSum: async () => { throw new Error('optional count unavailable'); },

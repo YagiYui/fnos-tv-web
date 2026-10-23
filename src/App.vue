@@ -8,12 +8,13 @@ import {isLibraryActive} from './navigation.js';
 import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from './theme.js';
 import {CatalogCache} from './catalog-cache.js';
 
-import {useMediaDbData, useMediaSearch, useLibraryViews} from './store.js'
+import {useMediaDbData, useMediaSearch, useLibraryViews, useBrowseSnapshots} from './store.js'
 import {useRoute} from "vue-router";
 
 const MediaDbData = useMediaDbData()
 const mediaSearch = useMediaSearch();
 const libraryViews = useLibraryViews();
+const browseSnapshots = useBrowseSnapshots();
 const contentLayout = ref(null);
 let contentScrollTop = 0;
 const pageScroll = {
@@ -188,6 +189,7 @@ function handleSelect(key) {
   if (key === "out") {
     mediaSearch.setAccount('');
     libraryViews.setAccount('');
+    browseSnapshots.setAccount('');
     initializedAccount = null;
     catalogCache.clear();
     homeLoads.clear();
@@ -226,6 +228,7 @@ async function onMountedFun() {
       COMMON.userKey = String(account);
       mediaSearch.setAccount(account);
       libraryViews.setAccount(account);
+      browseSnapshots.setAccount(account);
       const accountChanged = account !== initializedAccount;
       if (accountChanged) {
         catalogCache.clear();
@@ -263,6 +266,7 @@ watch(
       if (route.path === '/login') {
         mediaSearch.setAccount('');
         libraryViews.setAccount('');
+        browseSnapshots.setAccount('');
         delete COMMON.userKey;
         catalogCache.clear(); initializedAccount = null;
         homeLoads.clear();

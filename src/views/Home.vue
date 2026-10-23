@@ -1,8 +1,9 @@
 <script setup>
 import HomeCarousel from "../components/HomeCarousel.vue";
 import VisibleSection from '../components/VisibleSection.vue';
+import MediaImage from '../components/MediaImage.vue';
 import {continuePlaybackRoute} from './Play/player-presentation.js';
-import {useMediaDbData, useMediaSearch} from '../store'
+import {useMediaDbData, useMediaSearch, useBrowseSnapshots} from '../store'
 import {getCurrentInstance, onMounted, ref, onUnmounted, computed, h, watch, inject, nextTick} from "vue";
 import {onBeforeRouteLeave, RouterLink} from 'vue-router';
 import {groupSearchResults, searchResultRoute} from '../media-search.js';
@@ -16,6 +17,16 @@ const per_card = ref(window.innerWidth <= 768 ? 3 : 7);
 const instance = getCurrentInstance();
 const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
+const browseSnapshots = useBrowseSnapshots();
+const viewAccount = COMMON.userKey;
+const viewRevision = browseSnapshots.revision;
+const savedHome = browseSnapshots.get(viewAccount, 'home');
+let playController = null;
+let playGeneration = 0;
+function cancelPlayList() { playGeneration++; playController?.abort(); playController = null; }
+function saveHome() {
+  browseSnapshots.save(viewAccount, 'home', {playList: playList.value, scrollY: pageScroll.getTop()}, viewRevision);
+}
 const mediaSearch = useMediaSearch();
 const search = mediaSearch.state;
 const keyword = ref(search.query);
@@ -44,11 +55,13 @@ function searchHistory(value) { keyword.value = value; return submitSearch(); }
 watch(keyword, value => { if (!value.trim() && search.query) clearSearch(); });
 watch(() => search.query, value => { if (!value) keyword.value = ''; else cancelHomeLibraries(); });
 onBeforeRouteLeave(() => {
+  saveHome();
+  cancelPlayList();
   search.scrollY = pageScroll.getTop();
   mediaSearch.cancel();
   cancelHomeLibraries();
 });
-const playList = ref(null)
+const playList = ref(savedHome?.playList || null)
 const play_item_guid = ref(null);
 const showDropdown = ref(false)
 const dropdownX = ref(0)
@@ -124,23 +137,36 @@ const updateCarouselLayout = () => {
 window.addEventListener('resize', updateCarouselLayout);
 
 async function GetPlayList() {
-  let api = "/api/v1/play/list"
-  playList.value = await COMMON.requests("GET", api, true);
+  cancelPlayList();
+  const generation = playGeneration;
+  const controller = playController = new AbortController();
+  const current = () => generation === playGeneration && !controller.signal.aborted && viewAccount === COMMON.userKey && viewRevision === browseSnapshots.revision;
+  try {
+    const result = await COMMON.requests('GET', '/api/v1/play/list', true, {}, {signal: controller.signal});
+    if (!current()) return;
+    if (!Array.isArray(result)) throw new Error('继续观看数据无效');
+    playList.value = result;
+    saveHome();
+  } catch (error) {
+    if (current()) throw error;
+  } finally { if (current()) playController = null; }
 }
+watch(() => browseSnapshots.revision, () => { cancelPlayList(); playList.value = null; }, {flush: 'sync'});
 
 onMounted(async () => {
   // 添加全局点击事件监听
   document.addEventListener('click', handleClickOutside)
   if (search.query) {
     if (search.status === 'idle') void mediaSearch.submit(COMMON.requests, search.query);
-    await nextTick();
-    pageScroll.scrollTo(search.scrollY);
   }
+  await nextTick();
+  pageScroll.scrollTo(search.query ? search.scrollY : savedHome?.scrollY || 0);
   try { await GetPlayList(); } catch (error) { message.error(error?.message || '继续观看加载失败'); }
 })
 
 // 组件卸载时移除事件监听
 onUnmounted(() => {
+  cancelPlayList();
   mediaSearch.cancel();
   cancelHomeLibraries();
   window.removeEventListener('resize', updateCarouselLayout);
@@ -168,7 +194,7 @@ onUnmounted(() => {
         <div class="card-show-content view-card-list">
           <div v-for="item in group.items" :key="item.guid" class="view-item poster-card">
             <component :is="searchResultRoute(item) ? RouterLink : 'div'" :to="searchResultRoute(item) || undefined" class="search-result-link">
-              <div class="poster-art"><img v-lazy="item.poster ? COMMON.imgUrl + item.poster : '/images/not_video.jpg'" :alt="item.title" loading="lazy"><span v-if="searchResultRoute(item)" class="poster-play"><i class="bx bx-play"></i></span><span v-if="Number(item.vote_average) > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="Number(item.watched) > 0" class="poster-watched"><i class="bx bx-check"></i></span></div>
+              <div class="poster-art"><MediaImage :src="item.poster ? COMMON.imgUrl + item.poster : '/images/not_video.jpg'" :alt="item.title" loading="lazy" /><span v-if="searchResultRoute(item)" class="poster-play"><i class="bx bx-play"></i></span><span v-if="Number(item.vote_average) > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="Number(item.watched) > 0" class="poster-watched"><i class="bx bx-check"></i></span></div>
               <div class="view-item-title">{{ item.title }}</div>
               <div class="poster-caption">{{ item.ancestor_name }}<span v-if="item.release_date"> · {{ String(item.release_date).slice(0, 4) }}</span></div>
               <div v-if="!searchResultRoute(item)" class="poster-caption">{{ item.type }}：暂不支持打开此类型</div>
@@ -193,7 +219,7 @@ onUnmounted(() => {
         <template #default="{item}">
         <div class="continue-card" @contextmenu="handleContextMenu($event, item)">
           <router-link :to="continuePlaybackRoute(item)">
-            <div class="continue-art"><img v-lazy="item.poster ? COMMON.imgUrl + item.poster : '/images/not_gellery.png'" :alt="item.tv_title || item.title" loading="lazy"><span class="poster-play"><i class="bx bx-play"></i></span>
+            <div class="continue-art"><MediaImage :src="item.poster ? COMMON.imgUrl + item.poster : '/images/not_gellery.png'" :alt="item.tv_title || item.title" loading="lazy" /><span class="poster-play"><i class="bx bx-play"></i></span>
               <div class="continue-progress" v-if="item.duration > 0"><span :style="{width: Math.min(100, Math.max(0, Number(item.ts || 0) / item.duration * 100)) + '%'}"></span></div>
             </div>
             <div class="view-item-title">{{ item.type === 'Episode' ? item.tv_title : item.title }}</div>
@@ -206,18 +232,18 @@ onUnmounted(() => {
     <VisibleSection v-for="library in visibleLibraries" :key="library.guid" class="card-shows" :aria-busy="Boolean(MediaDbData.loading?.[library.guid])" @visible="loadHomeLibrary(library.guid)">
         <div class="section-heading"><h2>{{ library.title }}</h2><router-link :to="libraryRoute(library)" class="section-more">查看全部 <i class="bx bx-chevron-right"></i></router-link></div>
         <n-alert v-if="MediaDbData.errors?.[library.guid]" type="error">{{ MediaDbData.errors[library.guid] }} <n-button text :loading="Boolean(MediaDbData.loading?.[library.guid])" @click="loadHomeLibrary(library.guid, true)">重试</n-button></n-alert>
-        <HomeCarousel v-else-if="filteredItems(library.guid).length" :items="filteredItems(library.guid)" :per-view="per_card" :mobile="isMobile">
+        <HomeCarousel v-if="filteredItems(library.guid).length" :items="filteredItems(library.guid)" :per-view="per_card" :mobile="isMobile">
           <template #default="{item}">
           <div class="view-item poster-card">
             <router-link :to="{path: '/video', query: {guid: item.guid, gallery_type: item.type}}">
-              <div class="poster-art"><img v-lazy="item.poster ? COMMON.imgUrl + '/92/17/' + item.poster + '?w=300' : '/images/not_video.jpg'" :alt="item.title || item.name" loading="lazy"><span class="poster-play"><i class="bx bx-play"></i></span><span v-if="item.vote_average > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="item.played" class="poster-watched"><i class="bx bx-check"></i></span></div>
+              <div class="poster-art"><MediaImage :src="item.poster ? COMMON.imgUrl + '/92/17/' + item.poster + '?w=300' : '/images/not_video.jpg'" :alt="item.title || item.name" loading="lazy" /><span class="poster-play"><i class="bx bx-play"></i></span><span v-if="item.vote_average > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="item.played" class="poster-watched"><i class="bx bx-check"></i></span></div>
               <div class="view-item-title">{{ item.title || item.name }}</div><div class="poster-caption" v-if="item.release_date">{{ String(item.release_date).slice(0, 4) }}</div>
             </router-link>
           </div>
         </template>
       </HomeCarousel>
       <n-empty v-else-if="MediaDbData.info[library.guid]" description="当前媒体库暂无影片" />
-      <div v-else class="home-library-placeholder" :style="{'--home-columns': per_card}" aria-hidden="true"><div v-for="slot in per_card" :key="slot"><n-skeleton class="poster-art" /><n-skeleton text /></div></div>
+      <div v-else-if="!MediaDbData.errors?.[library.guid]" class="home-library-placeholder" :style="{'--home-columns': per_card}" aria-hidden="true"><div v-for="slot in per_card" :key="slot"><n-skeleton class="poster-art" /><n-skeleton text /></div></div>
     </VisibleSection>
     </template>
     <n-dropdown
