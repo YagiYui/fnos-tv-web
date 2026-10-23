@@ -29,8 +29,9 @@ export function catalogFilterSummary(value, options = {}) {
     filters.genres !== null ? options.genres?.find(item => item.value === filters.genres)?.label || `题材 #${filters.genres}` : '',
     decades[filters.decade], watchedOptions.find(item => item.value === filters.watched)?.label].filter(Boolean).join(' · ');
 }
-export async function loadCatalogFilterOptions(requests, guid, category, signal) {
-  const params = new URLSearchParams({ancestor_guid: guid, is_favorite: '0'});
+export async function loadCatalogFilterOptions(requests, guid, category, signal, {favorites = false} = {}) {
+  const params = new URLSearchParams({is_favorite: favorites ? '1' : '0'});
+  if (!favorites && guid) params.set('ancestor_guid', guid);
   if (['Movie', 'TV'].includes(category)) params.set('type', category);
   const results = await Promise.allSettled([
     requests('GET', '/api/v1/tag/list?' + params, true, {}, {signal}),
