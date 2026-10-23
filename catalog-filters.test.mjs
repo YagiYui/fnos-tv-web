@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {catalogTags, emptyCatalogFilters, normalizeCatalogFilters, catalogTypeOptions, catalogFilterCount, loadCatalogFilterOptions} from './src/catalog-filters.js';
+import {catalogTags, emptyCatalogFilters, normalizeCatalogFilters, catalogTypeOptions, catalogFilterCount, catalogFilterSummary, loadCatalogFilterOptions} from './src/catalog-filters.js';
 
 assert.deepEqual(catalogTags(emptyCatalogFilters()), {type: ['Movie', 'TV', 'Directory', 'Video']});
 assert.deepEqual(catalogTags({type: 'Movie', genres: 7, decade: '2010s', watched: '0'}),
@@ -7,6 +7,8 @@ assert.deepEqual(catalogTags({type: 'Movie', genres: 7, decade: '2010s', watched
 assert.deepEqual(catalogTags({type: 'TV', watched: '1'}), {type: ['TV'], watched: '1'});
 assert.equal(catalogFilterCount({watched: '0'}), 1, 'Unwatched must not be discarded as falsy');
 assert.equal(catalogFilterCount({type: 'Movie', genres: 7, decade: '2010s', watched: '1'}), 4);
+assert.equal(catalogFilterSummary({genres: 7, watched: '0'}, {genres: [{value: 7, label: '剧情'}]}), '剧情 · 未看');
+assert.equal(catalogFilterSummary({genres: 9}), '题材 #9');
 assert.deepEqual(normalizeCatalogFilters({type: 'invalid', genres: 'NaN', decade: '1900..2026', watched: false}), emptyCatalogFilters());
 assert.equal(normalizeCatalogFilters({genres: 0}).genres, 0);
 assert.equal(catalogTypeOptions('Movie').length, 1); assert.equal(catalogTypeOptions('mixed').length, 2);

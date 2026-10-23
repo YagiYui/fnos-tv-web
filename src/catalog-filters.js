@@ -23,6 +23,12 @@ export function catalogFilterCount(value) {
   const filters = normalizeCatalogFilters(value);
   return Number(Boolean(filters.type)) + Number(filters.genres !== null) + Number(Boolean(filters.decade)) + Number(filters.watched !== '');
 }
+export function catalogFilterSummary(value, options = {}) {
+  const filters = normalizeCatalogFilters(value);
+  return [types.find(item => item.value === filters.type)?.label,
+    filters.genres !== null ? options.genres?.find(item => item.value === filters.genres)?.label || `题材 #${filters.genres}` : '',
+    decades[filters.decade], watchedOptions.find(item => item.value === filters.watched)?.label].filter(Boolean).join(' · ');
+}
 export async function loadCatalogFilterOptions(requests, guid, category, signal) {
   const params = new URLSearchParams({ancestor_guid: guid, is_favorite: '0'});
   if (['Movie', 'TV'].includes(category)) params.set('type', category);
