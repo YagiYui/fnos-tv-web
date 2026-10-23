@@ -354,7 +354,7 @@ watch(
                           <span class="title">首页</span>
                         </router-link>
                       </li>
-                      <li><router-link to="/list?scope=favorites" @click="isMobile && (collapsed = true)" :class="{'library-active': route.path === '/list' && route.query.scope === 'favorites'}"><span class="icon"><i class="bx bx-star"></i></span><span class="title">收藏</span></router-link></li>
+                      <li><router-link to="/list?scope=favorites" active-class="" exact-active-class="" @click="isMobile && (collapsed = true)" :class="{'library-active': route.path === '/list' && route.query.scope === 'favorites'}"><span class="icon"><i class="bx bx-star"></i></span><span class="title">收藏</span></router-link></li>
                     </ul>
                   </div>
                 </div>
