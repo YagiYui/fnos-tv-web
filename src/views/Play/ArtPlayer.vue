@@ -5,6 +5,9 @@
 <script>
 import Artplayer from 'artplayer';
 
+// The page owns explicit recovery; do not reload an expired URL behind its error card.
+Artplayer.RECONNECT_TIME_MAX = 0;
+
 export default {
   data() {
     return {

@@ -61,6 +61,13 @@ const source = fs.readFileSync(new URL('./src/views/Play/VideoPlayer.vue', impor
 function player() {
   const api = requestsFixture(), events = [], notices = [];
   const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController,
+    recoveryState: {value: null}, recoveryBusy: {value: false}, recoveryRun: 0,
+    sourceTimer: null, sourceEpisode: null, sourcePosition: null, sourcePaused: false,
+    clearTimeout() {}, clearPlaybackRecovery() { ctx.recoveryState.value = null; },
+    reportPlaybackFailure(error, snapshot) { ctx.recoveryState.value = {...snapshot, message: error.message}; },
+    isPlaybackAbort: error => ['AbortError', 'CanceledError'].includes(error.name),
+    switchRecoverableSource: async (player, url, options) => { events.push(['recovery-options', options]); await player.switchUrl(url); }, UpdateControl: async () => {},
+    watchPlaybackSource() {},
     playbackSession: new PlaybackSession(), subtitleSwitchGeneration: 0, danmakuLoadGeneration: 0, subtitleSearchGeneration: 0,
     autoplayCountdown: {cancel() {}}, timerSendPlayRecord: {value: null}, clearInterval() {},
     guid: {value: 'season'}, episode_guid: {value: 'one'}, gallery_type: {value: 'TV'},
@@ -71,7 +78,7 @@ function player() {
     urlBase: {value: '/old'}, url: {value: '/fnos/old'}, playUrl: {value: 'http://nas/fnos/old'}, serverSubtitleGuid: '',
     window: {location: {origin: 'http://nas'}}, use_302_play: {value: false},
     streamSubtitleGuid: track => track?.guid || '', GetChannels: async () => 2,
-    art: {loading: {show: false}, switchUrl: async url => events.push(['switch', url])},
+    art: {loading: {show: false}, video: {paused: false}, pause() {}, switchUrl: async url => events.push(['switch', url])},
     GetEmoji() {}, mediaP: async (...args) => events.push(args),
     SendPlayRecord: () => { events.push('progress'); return new Promise(() => {}); },
     COMMON: {requests: api.requests, fnHost: '/fnos', ShowMsg: text => notices.push(text)}, errorText: error => error.message};
@@ -82,7 +89,7 @@ function player() {
     source.slice(source.indexOf('function setQualityOptions('), source.indexOf('// 切换清晰度')),
     source.slice(source.indexOf('async function GetPayInfo('), source.indexOf('async function GetChannels(')),
     source.slice(source.indexOf('async function GetPalyUrl(startTimestamp'), source.indexOf('function playbackRecordSnapshot')),
-    source.slice(source.indexOf('async function play()'), source.indexOf('async function switchSubtitleUrl('))
+    source.slice(source.indexOf('async function play(options'), source.indexOf('async function switchSubtitleUrl('))
   ];
   vm.runInContext(pieces.join('\n'), context);
   return {api, ctx: context, events, notices};
@@ -106,7 +113,7 @@ assert.equal(view.events.some(event => event[0] === 'switch' && event[1] === '/f
 assert.equal(view.events.some(event => event[0] === 'media.quit' && event[1] === '/old'), true);
 view = player(); pending = view.ctx.play_next();
 view.api.calls[0].reject(new Error('unavailable')); await pending;
-assert.equal(view.ctx.episode_guid.value, 'one'); assert.equal(view.ctx.playInfo.value.guid, 'one');
+assert.equal(view.ctx.episode_guid.value, 'two', 'Failed target stays selected for the recovery action'); assert.equal(view.ctx.playInfo.value.guid, 'one');
 assert.equal(view.ctx.art.loading.show, false); assert.match(view.notices[0], /unavailable/);
 view = player(); const superseded = view.ctx.play_next();
 view.ctx.episode_guid.value = 'three'; pending = view.ctx.play();
@@ -124,4 +131,20 @@ assert.equal(view.api.calls.length, 2); assert.match(view.api.last().path, /stre
 view.api.last().resolve(streams); await settle(); view.api.last().resolve(qualities); await settle();
 view.api.last().resolve({play_link: '/initial'}); await pending;
 assert.equal(view.api.calls.filter(call => call.path === '/api/v1/play/info').length, 1);
+
+// Recovery explicitly preserves zero position, pause, chosen audio and disabled subtitles.
+view = player();
+const recovery = {episode: 'one', position: 0, paused: true, audioGuid: 'en', subtitleGuid: '', quality: {resolution: '720', bitrate: 200}};
+pending = view.ctx.play(recovery);
+view.api.calls[1].resolve(streams); await settle(); view.api.last().resolve([...qualities, recovery.quality]);
+view.api.calls[0].resolve(info('one')); await settle();
+assert.equal(view.api.last().data.startTimestamp, 0); assert.equal(view.api.last().data.audio_guid, 'en');
+assert.equal(view.api.last().data.subtitle_guid, ''); assert.equal(view.api.last().data.resolution, '720'); assert.equal(view.api.last().data.bitrate, 200);
+view.api.last().resolve({play_link: '/recovered'}); await pending;
+assert.equal(view.ctx.playInfo.value.watched_ts, 0);
+assert.equal(view.events.find(event => event[0] === 'recovery-options')[1].paused, true);
+view = player(); pending = view.ctx.play({...recovery, external: true});
+view.api.calls[1].resolve(streams); await settle(); view.api.last().resolve([...qualities, recovery.quality]);
+view.api.calls[0].resolve(info('one')); await settle(); view.api.last().resolve({play_link: '/external'}); await pending;
+assert.equal(view.events.some(event => event[0] === 'switch'), false, 'External recovery does not restart web video');
 console.log('PASS: parallel playback metadata, early quality dependency, sibling cancellation, no duplicate initial info, actual next handlers preserve tracks/resume and progress nonblocking with immediate loading');

@@ -10,7 +10,7 @@ assert.equal(nextEpisode(episodes, {episode_number: 1}, 'Movie'), null);
 assert.equal(nextEpisode([{guid: 'two', episode_number: 2, season_number: 2}], {episode_number: 1, season_number: 1}, 'TV'), null);
 const src = fs.readFileSync('./src/views/Play/VideoPlayer.vue', 'utf8');
 let resolvePlay; let plays = 0; const notices = [];
-const context = vm.createContext({nextEpisode, previousEpisode, EpisodeList: {value: episodes}, playInfo: {value: {episode_number: 1}},
+const context = vm.createContext({nextEpisode, previousEpisode, recoveryState: {value: null}, EpisodeList: {value: episodes}, playInfo: {value: {episode_number: 1}},
   gallery_type: {value: 'TV'}, episode_guid: {value: 'one'}, SendPlayRecord: async () => {},
   play: () => {plays++; return new Promise(resolve => resolvePlay = resolve);},
   COMMON: {ShowMsg: text => notices.push(text)}, errorText: error => error.message});
