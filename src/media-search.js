@@ -2,7 +2,7 @@ export const SEARCH_BATCH_SIZE = 21;
 const HISTORY_LIMIT = 10;
 
 export function createSearchState() {
-  return {query: '', items: [], status: 'idle', error: '', history: [], limit: SEARCH_BATCH_SIZE, scrollY: 0};
+  return {query: '', items: [], status: 'idle', error: '', history: [], limit: SEARCH_BATCH_SIZE, scrollY: 0, stale: false};
 }
 
 // COMMON.requests unwraps the official {code, msg, data} envelope and rejects business errors.
@@ -80,10 +80,12 @@ export class MediaSearch {
     this.cancel();
     Object.assign(this.state, createSearchState(), {history: this.state.history});
   }
+  invalidate() { this.cancel(); this.state.stale = Boolean(this.state.query); }
 
-  async submit(requests, query) {
+  async submit(requests, query, {preserve = false} = {}) {
     const keyword = String(query ?? '').trim();
-    this.clear();
+    if (preserve && keyword === this.state.query) { this.cancel(); this.state.error = ''; }
+    else this.clear();
     if (!keyword) return;
     this.state.query = keyword;
     if (!this.account) {
@@ -100,6 +102,7 @@ export class MediaSearch {
       if (generation !== this.generation || controller.signal.aborted) return;
       this.state.items = items;
       this.state.status = 'success';
+      this.state.stale = false;
       this.saveHistory(keyword);
     } catch (error) {
       if (generation !== this.generation || controller.signal.aborted) return;

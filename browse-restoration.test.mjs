@@ -48,7 +48,7 @@ function mountHome() {
   const errors = [], scope = Vue.effectScope();
   const context = vm.createContext({...Vue, AbortController, continuePlaybackRoute,
     useBrowseSnapshots: () => store,
-    inject: key => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : () => {},
+    inject: (key, fallback) => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : fallback,
     useMediaSearch: () => ({state: {query: '', scrollY: 0}, cancel() {}}), useMediaDbData: () => ({list: []}),
     getCurrentInstance: () => ({appContext: {config: {globalProperties: {$COMMON: COMMON}}}}),
     useMessage: () => ({error: error => errors.push(error)}), NIcon: {},

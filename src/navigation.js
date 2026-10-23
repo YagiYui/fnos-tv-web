@@ -1,6 +1,7 @@
 export function isLibraryActive(route, guid) {
-  return route.path === '/list' && route.query.gallery_uid === guid;
+  return route.path === '/list' && route.query.scope !== 'favorites' && route.query.gallery_uid === guid;
 }
+export function libraryViewKey(route) { return route.query.scope === 'favorites' ? '@favorites' : route.query.gallery_uid; }
 
 export function pageBackAction(route, previous) {
   if (route.path === '/list') return {type: 'replace', to: '/'};

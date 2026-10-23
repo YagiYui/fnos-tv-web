@@ -5,6 +5,14 @@ const routes = {
   watched: {add: 'POST', remove: 'DELETE', path: '/api/v1/item/watched', field: 'watched'}
 };
 const validId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value);
+export function seasonTargets(seasonId, info, episodes) {
+  if (!validId(seasonId) || info?.guid !== seasonId || !Array.isArray(episodes) || !episodes.length || episodes.length > 1000 ||
+      episodes.some(item => !validId(item?.guid) || (item.parent_guid && item.parent_guid !== seasonId))) throw new Error('分集范围无效，请刷新后重试');
+  const ids = [...new Set(episodes.map(item => item.guid))];
+  const expected = Number(info.local_number_of_episodes || info.number_of_episodes);
+  if (Number.isSafeInteger(expected) && expected > ids.length) throw new Error('分集尚未完整加载，请刷新后重试');
+  return ids;
+}
 export function mediaFlag(info, kind) {
   if (!Object.hasOwn(routes, kind)) return null;
   const value = info?.[routes[kind]?.field];

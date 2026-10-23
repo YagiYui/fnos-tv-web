@@ -5,15 +5,20 @@ import {getCurrentInstance, onMounted, onBeforeUnmount, ref, computed, watch, in
 import {useMediaDbData, useLibraryViews} from '@/store.js'
 import {onBeforeRouteUpdate, onBeforeRouteLeave} from "vue-router";
 import {emptyCatalogFilters, normalizeCatalogFilters, catalogTags, catalogTypeOptions, catalogFilterCount, catalogFilterSummary, loadCatalogFilterOptions, watchedOptions} from '../../catalog-filters.js';
+import {listFavoriteMedia} from '../../media-actions.js';
+import {libraryViewKey} from '../../navigation.js';
 
 const MediaDbData = useMediaDbData()
 const libraryViews = useLibraryViews();
 const sortColumn = ref('create_time');
 const sortType = ref('DESC');
 const pageScroll = inject('pageScroll', {getTop: () => window.scrollY, scrollTo: top => window.scrollTo(0, top)});
+const mediaChanges = inject('mediaChanges', ref(0));
+const viewMediaRevision = ref(mediaChanges.value);
 
 const guid = ref(null);
-const libraryTitle = computed(() => MediaDbData.list?.find(item => item.guid === guid.value)?.title || '媒体库');
+const isFavorites = computed(() => guid.value === '@favorites');
+const libraryTitle = computed(() => isFavorites.value ? '收藏' : MediaDbData.list?.find(item => item.guid === guid.value)?.title || '媒体库');
 const mode = computed({
   get: () => sortColumn.value,
   set: (value) => {
@@ -37,7 +42,7 @@ const filterOptionsError = ref('');
 let optionsController = null;
 let optionsGeneration = 0;
 let requestedPage = 1;
-const libraryCategory = computed(() => MediaDbData.list?.find(item => item.guid === guid.value)?.category || proxy.$route.query.gallery_type);
+const libraryCategory = computed(() => isFavorites.value ? '' : MediaDbData.list?.find(item => item.guid === guid.value)?.category || proxy.$route.query.gallery_type);
 const typeOptions = computed(() => catalogTypeOptions(libraryCategory.value));
 const filterCount = computed(() => catalogFilterCount(filters.value));
 const filterSummary = computed(() => catalogFilterSummary(filters.value, filterOptions.value));
@@ -58,7 +63,7 @@ let applyingView = false;
 let viewGeneration = 0;
 const resultKey = ref('');
 let viewAccount = null;
-const resultsMatch = computed(() => resultKey.value === queryKey());
+const resultsMatch = computed(() => resultKey.value === queryKey() && viewMediaRevision.value === mediaChanges.value);
 const hasNextPage = computed(() => total.value !== null ? page.value * size.value < total.value : MediaDbInfo.value.length === size.value);
 const totalPages = computed(() => total.value !== null ? Math.max(1, Math.ceil(total.value / size.value)) : null);
 
@@ -109,7 +114,7 @@ async function getFilterOptions() {
   const current = () => generation === optionsGeneration && !requestController.signal.aborted && id === guid.value && account === COMMON.userKey && account === viewAccount;
   filterOptionsLoading.value = true; filterOptionsError.value = '';
   try {
-    const result = await loadCatalogFilterOptions(COMMON.requests, id, libraryCategory.value, requestController.signal);
+    const result = await loadCatalogFilterOptions(COMMON.requests, isFavorites.value ? null : id, libraryCategory.value, requestController.signal, {favorites: isFavorites.value});
     if (!current()) return;
     filterOptions.value = {genres: result.genres, decades: result.decades};
     filterOptionsError.value = result.warning;
@@ -144,7 +149,7 @@ function cancelPending() {
   listLoading.value = false;
 }
 function saveView() {
-  const hasData = resultKey.value === queryKey();
+  const hasData = resultsMatch.value;
   libraryViews.save(viewAccount, guid.value, {mode: mode.value, order: order.value,
     filters: normalizeCatalogFilters(filters.value), filterOptions: filterOptions.value,
     page: hasData ? page.value : 1, size: size.value, total: hasData ? total.value : null,
@@ -155,6 +160,7 @@ async function loadLibrary(id) {
   cancelPending();
   closeSort();
   viewAccount = COMMON.userKey;
+  viewMediaRevision.value = mediaChanges.value;
   guid.value = typeof id === 'string' ? id : '';
   if (!guid.value) { MediaDbInfo.value = []; resultKey.value = ''; listError.value = '请选择有效的媒体库'; return; }
   const saved = libraryViews.get(viewAccount, guid.value);
@@ -181,8 +187,9 @@ async function GetMediaDbInfos(targetPage = requestedPage, {preserveScroll = fal
   controller?.abort();
   const requestController = controller = new AbortController();
   const account = COMMON.userKey;
+  const changeRevision = mediaChanges.value;
   const generation = ++listGeneration;
-  const isCurrent = () => generation === listGeneration && !requestController.signal.aborted && account === COMMON.userKey && account === viewAccount;
+  const isCurrent = () => generation === listGeneration && !requestController.signal.aborted && account === COMMON.userKey && account === viewAccount && changeRevision === mediaChanges.value;
   listLoading.value = true;
   listError.value = '';
   requestedPage = targetPage;
@@ -196,7 +203,9 @@ async function GetMediaDbInfos(targetPage = requestedPage, {preserveScroll = fal
     sort_column: mode.value
   };
   try {
-    const res = await COMMON.requests('POST', '/api/v1/item/list', true, request, {signal: requestController.signal});
+    const res = isFavorites.value ? await listFavoriteMedia(COMMON.requests, {page: targetPage, pageSize: size.value,
+      sortColumn: mode.value, sortType: order.value, filters: filters.value, signal: requestController.signal})
+      : await COMMON.requests('POST', '/api/v1/item/list', true, request, {signal: requestController.signal});
     if (!isCurrent()) return;
     if (!Array.isArray(res?.list)) throw new Error('片库加载失败，请重试');
     const count = res.total == null ? NaN : Number(res.total);
@@ -213,6 +222,7 @@ async function GetMediaDbInfos(targetPage = requestedPage, {preserveScroll = fal
     MediaDbInfo.value = res.list;
     page.value = targetPage;
     total.value = knownTotal;
+    viewMediaRevision.value = changeRevision;
     resultKey.value = queryKey();
     if (!preserveScroll) {
       await nextTick();
@@ -234,12 +244,17 @@ async function NextPage() {
 }
 watch([mode, order, () => JSON.stringify(filters.value)], () => { if (!applyingView) void GetMediaDbInfos(1); });
 onBeforeRouteUpdate(to => {
-  if (to.query.gallery_uid !== guid.value) { saveView(); viewGeneration++; cancelPending(); closeSort(); }
+  if (libraryViewKey(to) !== guid.value) { saveView(); viewGeneration++; cancelPending(); closeSort(); }
 });
-watch(() => proxy.$route.query.gallery_uid, id => { void loadLibrary(id); });
+watch(() => libraryViewKey(proxy.$route), id => { void loadLibrary(id); });
+watch(() => mediaChanges.value, () => {
+  if (!guid.value) return;
+  cancelPending(); resultKey.value = '';
+  void GetMediaDbInfos(page.value, {preserveScroll: true});
+});
 onBeforeRouteLeave(() => { saveView(); viewGeneration++; cancelPending(); closeSort(); });
 onBeforeUnmount(() => { viewGeneration++; cancelPending(); cancelFilterOptions(); });
-onMounted(async () => { await loadLibrary(proxy.$route.query.gallery_uid); });
+onMounted(async () => { await loadLibrary(libraryViewKey(proxy.$route)); });
 </script>
 
 <template>
@@ -271,7 +286,7 @@ onMounted(async () => { await loadLibrary(proxy.$route.query.gallery_uid); });
         </router-link>
       </div>
     </div>
-    <n-empty v-if="!listLoading && !listError && !MediaDbInfo.length" :description="filterCount ? '没有符合当前筛选条件的影片' : '当前媒体库暂无影片'" class="catalog-empty" />
+    <n-empty v-if="!listLoading && !listError && !MediaDbInfo.length" :description="filterCount ? '没有符合当前筛选条件的影片' : isFavorites ? '暂无收藏影片' : '当前媒体库暂无影片'" class="catalog-empty" />
     <nav class="catalog-pagination" aria-label="列表翻页"><n-button @click="BackPage()" :disabled="listLoading || !resultsMatch || page <= 1" secondary>上一页</n-button><span>第 {{ page }} 页<span v-if="totalPages"> / {{ totalPages }}</span></span><n-button @click="NextPage()" :disabled="listLoading || !resultsMatch || !hasNextPage" secondary>下一页</n-button></nav>
     <n-modal :show="showSort" @update:show="value => { if (!value) closeSort(); }" transform-origin="center">
       <n-card class="catalog-filter-card" title="筛选与排序" :bordered="false" size="large" role="dialog" aria-modal="true" aria-label="筛选与排序">

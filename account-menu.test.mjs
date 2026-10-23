@@ -14,6 +14,7 @@ const context = vm.createContext({COMMON, MediaDbData: media, data: ref(media.li
   UserInfo: ref({username: '示例用户'}), serviceVersion: ref(''),
   mediaSearch: {setAccount: value => { searchAccount = value; }, clearHistory: () => { historyClears++; }},
   libraryViews: {setAccount: value => { assert.equal(value, ''); }}, homeLoads: new Map(),
+  mediaActions: {setAccount() {}},
   browseSnapshots: {setAccount: value => { assert.equal(value, ''); }},
   catalogCache: {clear: () => { cacheClears++; }}, VueCookies: {remove: name => removed.push(name)},
   setTimeout: callback => { timers.push(callback); }, location: {reload: () => { reloads++; }}});

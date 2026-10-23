@@ -24,7 +24,7 @@ function mountHome() {
   const scope = effectScope();
   const context = vm.createContext({ref, computed, watch, nextTick, h, AbortController, RouterLink: {}, groupSearchResults, searchResultRoute,
     useBrowseSnapshots: () => snapshots,
-    inject: key => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : () => {},
+    inject: (key, fallback) => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : fallback,
     useMediaSearch: () => store, useMediaDbData: () => ({list: [], info: {}, errors: {}}),
     getCurrentInstance: () => ({appContext: {config: {globalProperties: {$COMMON: COMMON}}}}),
     useMessage: () => ({error: value => { throw new Error(value); }}), NIcon: {},
