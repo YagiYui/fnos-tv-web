@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {PlaybackSession} from './src/views/Play/playback-session.js';
+import {primaryMediaFile} from './src/views/Play/playback-metadata.js';
 import {chooseAudio, audioLabel, readPlayerPreference, writePlayerPreference, createAutoplayCountdown} from './src/views/Play/audio-tracks.js';
 const tracks = [{guid:'en',language:'eng',codec_name:'aac',channels:2},
   {guid:'zh',language:'zho',codec_name:'ac3',channels:6,is_default:1}];
@@ -26,7 +27,7 @@ countdown.start(2);countdown.start(1);assert.equal(timers.size,1);tick();assert.
 
 const source = fs.readFileSync('./src/views/Play/VideoPlayer.vue', 'utf8');
 const calls = [], messages = [];
-const state = vm.createContext({Math, audioLabel, writePlayerPreference,
+const state = vm.createContext({Math, audioLabel, writePlayerPreference, primaryMediaFile,
   playbackSession: new PlaybackSession(), localStorage: storage,
   preferredAudioLanguage: {value: ''}, currentAudio: {value: tracks[0]},
   StreamList: {value: {audio_streams: tracks, video_streams: [{guid:'video',codec_name:'h264',bps:100}], files:[{guid:'file',path:'/movie.mkv'}]}},

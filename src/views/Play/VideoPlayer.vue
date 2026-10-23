@@ -15,6 +15,7 @@ import {SubtitleOverlay, waitForAssSubtitle} from './ass-renderer.js';
 import {playbackTitle, playbackSelection, nextEpisode} from './player-presentation.js';
 import {renderDanmaku} from './danmaku-renderer.js';
 import {PlaybackSession, createProgressReporter} from './playback-session.js';
+import {loadPlaybackMetadata, primaryMediaFile} from './playback-metadata.js';
 import {chooseAudio, audioLabel, readPlayerPreference, writePlayerPreference, createAutoplayCountdown} from './audio-tracks.js';
 const playbackSession = new PlaybackSession();
 import {installMobileFullscreen} from './mobile-fullscreen.js';
@@ -634,19 +635,7 @@ async function loadDanmuku() {
 }
 
 // 获取清晰度
-async function GetQuality(operation = null) {
-  let api = "/api/v1/play/quality"
-  let regex = /\d+-\d+-\S+/;
-  let local = StreamList.value.files.find(o => !regex.test(o.path))
-  if (local === null || local === undefined) {
-    local = StreamList.value.files[0];
-  }
-  let _data = {
-    "media_guid": local.guid
-  }
-  let res = await COMMON.requests("POST", api, true, _data, {signal: operation?.signal});
-  operation?.assertCurrent();
-  if (!Array.isArray(res) || !res.length) throw new Error('当前影片没有可用画质');
+function setQualityOptions(res) {
   QualityData.value = res;
 
   // 按分辨率分组，每个分辨率下按码率排序
@@ -761,15 +750,6 @@ async function GetPayInfo(_guid, operation = null) {
   return res;
 }
 
-async function GetStreamList(operation = null) {
-  let api = "/api/v1/stream/list/" + episode_guid.value + '?before_play=1';
-  const streams = await COMMON.requests("GET", api, true, {}, {signal: operation?.signal});
-  operation?.assertCurrent();
-  if (!streams?.files?.length || !streams?.video_streams?.length) throw new Error('当前影片没有可用视频流');
-  StreamList.value = streams;
-  currentAudio.value = chooseAudio(streams.audio_streams, playInfo.value.audio_guid, preferredAudioLanguage.value);
-}
-
 async function GetChannels(s) {
   return s < 6 ? 2 : device.mediaCanPlay.audioChannels >= 6 ? 6 : 2
 }
@@ -802,11 +782,7 @@ async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation 
   let api = "/api/v1/play/play"
   const audio = audioOverride;
   const _channels = audio?.channels || 2;
-  let regex = /\d+-\d+-\S+/;
-  let local = StreamList.value.files.find(o => !regex.test(o.path))
-  if (local === null || local === undefined) {
-    local = StreamList.value.files[0];
-  }
+  const local = primaryMediaFile(StreamList.value);
   let _data = {
     "media_guid": local.guid,
     "video_guid": StreamList.value.video_streams[0].guid,
@@ -1273,50 +1249,58 @@ async function play() {
   autoplayCountdown.cancel();
   stopAfterCurrent.value = false;
   const operation = playbackSession.begin();
-  subtitleSwitchGeneration++;
-  danmakuLoadGeneration++;
-  showDanmakuSearch.value = false;
-  danmakuResults.value = [];
-  danmakuEpisodes.value = [];
-  danmakuSearchDone.value = false;
-  danmakuSearchError.value = '';
-  subtitleSearchGeneration++;
-  subtitleSearchBusy.value = false;
-  showSubtitleSearch.value = false;
-  subtitleResults.value = [];
-  subtitleSearchDone.value = false;
-  subtitleSearchError.value = '';
-  subtitlePlaybackError.value = '';
-  if (timerSendPlayRecord.value !== null) {
-    clearInterval(timerSendPlayRecord.value)
-  }
-  let playLink = urlBase.value;
-  if (!episode_guid.value) {
-    let guidPlayInfo = await GetPayInfo(guid.value, operation)
-    episode_guid.value = guidPlayInfo.item.guid
-  }
-  let _PayInfo = await GetPayInfo(episode_guid.value, operation);
-  playInfo.value = _PayInfo.item;
-  await GetStreamList(operation);
+  if (art) art.loading.show = true;
+  try {
+    subtitleSwitchGeneration++;
+    danmakuLoadGeneration++;
+    showDanmakuSearch.value = false;
+    danmakuResults.value = [];
+    danmakuEpisodes.value = [];
+    danmakuSearchDone.value = false;
+    danmakuSearchError.value = '';
+    subtitleSearchGeneration++;
+    subtitleSearchBusy.value = false;
+    showSubtitleSearch.value = false;
+    subtitleResults.value = [];
+    subtitleSearchDone.value = false;
+    subtitleSearchError.value = '';
+    subtitlePlaybackError.value = '';
+    if (timerSendPlayRecord.value !== null) {
+      clearInterval(timerSendPlayRecord.value)
+    }
+    let playLink = urlBase.value;
+    let initialInfo = null;
+    if (!episode_guid.value) {
+      initialInfo = await GetPayInfo(guid.value, operation);
+      episode_guid.value = initialInfo.item.guid;
+    }
+    const metadata = await loadPlaybackMetadata(COMMON.requests, episode_guid.value, {signal: operation.signal, initialInfo});
+    operation.assertCurrent();
+    playInfo.value = metadata.info.item;
+    StreamList.value = metadata.streams;
+    currentAudio.value = chooseAudio(metadata.streams.audio_streams, playInfo.value.audio_guid, preferredAudioLanguage.value);
+    setQualityOptions(metadata.qualities);
 
-  subtitleLoader.clear();
-  currentSubtitle.value = null;
-  // 优先使用播放记录中的轨道，其次使用默认轨道。
-  if (StreamList.value && StreamList.value.subtitle_streams && StreamList.value.subtitle_streams.length > 0) {
-    const tracks = StreamList.value.subtitle_streams;
-    currentSubtitle.value = tracks.find(sub => sub.guid === playInfo.value.subtitle_guid)
-      || tracks.find(sub => Number(sub.is_default) === 1) || tracks[0];
-  }
+    subtitleLoader.clear();
+    currentSubtitle.value = null;
+    // 优先使用播放记录中的轨道，其次使用默认轨道。
+    if (StreamList.value && StreamList.value.subtitle_streams && StreamList.value.subtitle_streams.length > 0) {
+      const tracks = StreamList.value.subtitle_streams;
+      currentSubtitle.value = tracks.find(sub => sub.guid === playInfo.value.subtitle_guid)
+        || tracks.find(sub => Number(sub.is_default) === 1) || tracks[0];
+    }
 
-  await GetQuality(operation);
-  await GetPalyUrl(undefined, operation);
-  operation.assertCurrent();
-  GetEmoji();
-  if (art !== null) {
-    await art.switchUrl(url.value);
-  }
-  if (playLink && playLink !== urlBase.value) {
-    void mediaP("media.quit", playLink).catch(() => {});
+    await GetPalyUrl(undefined, operation);
+    operation.assertCurrent();
+    GetEmoji();
+    if (art !== null) {
+      await art.switchUrl(url.value);
+    }
+    if (playLink && playLink !== urlBase.value) {
+      void mediaP("media.quit", playLink).catch(() => {});
+    }
+  } finally {
+    if (operation.isCurrent() && art) art.loading.show = false;
   }
 }
 
