@@ -20,6 +20,7 @@ import {mediaFileLabel} from './media-files.js';
 import {shiftVtt, localSubtitleVtt, MAX_LOCAL_SUBTITLE_BYTES} from './subtitle-adjustments.js';
 import {playbackDiagnostics} from './playback-diagnostics.js';
 import PlaybackRecoveryCard from './PlaybackRecoveryCard.vue';
+import DanmakuSourcesDialog from './DanmakuSourcesDialog.vue';
 import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRecoverableSource, bufferedPlaybackFailure} from './playback-recovery.js';
 import {chooseAudio, audioLabel, createAutoplayCountdown} from './audio-tracks.js';
 import {createPlayerPreferenceStore} from './player-preferences.js';
@@ -272,6 +273,47 @@ const timerSendPlayRecord = ref(null);
 const emojos = ref(null);
 const allDanmaku = ref({})
 const showDanmakuSearch = ref(false);
+const showDanmakuSources = ref(false);
+const danmakuSourceConfig = ref(null);
+const activeDanmakuSource = ref('');
+const danmakuApplyScope = ref('episode');
+let danmakuRequestController = new AbortController();
+let danmakuQueryGeneration = 0;
+function cancelDanmakuRequests() {
+  danmakuRequestController.abort(); danmakuRequestController = new AbortController();
+  danmakuQueryGeneration++; danmakuBusy.value = false;
+}
+const danmakuSearchChoices = computed(() => {
+  if (!danmakuSourceConfig.value) return [{label: '360影视', value: '360'}, {label: '豆瓣', value: 'douban'}];
+  return ['searches', 'custom'].flatMap(kind => (danmakuSourceConfig.value[kind] || []).filter(row => row.enabled).map(row => ({label: row.name, value: row.id})));
+});
+const activeDanmakuSourceName = computed(() => ['providers','custom'].flatMap(key => danmakuSourceConfig.value?.[key] || []).find(row => row.id === activeDanmakuSource.value)?.name || activeDanmakuSource.value || '尚未选择');
+async function loadDanmakuSourceConfig() {
+  const owner = preferenceHandle;
+  const generation = danmakuQueryGeneration;
+  try {
+    const result = await danmakuRequest('/danmu/sources');
+    if (!owner.isCurrent() || generation !== danmakuQueryGeneration) return;
+    danmakuSourceConfig.value = result.data;
+    if (!danmakuSearchChoices.value.some(row => row.value === danmakuSearchSource.value)) danmakuSearchSource.value = danmakuSearchChoices.value[0]?.value || '';
+  } catch (error) { if (owner.isCurrent() && error.name !== 'AbortError') danmakuSearchError.value = errorText(error); }
+}
+function openDanmakuSources() {
+  if (art) art.setting.show = false;
+  if (art?.fullscreen) art.fullscreen = false;
+  if (art?.fullscreenWeb) art.fullscreenWeb = false;
+  showDanmakuSources.value = true;
+}
+async function reloadDanmakuSources() {
+  const owner = preferenceHandle;
+  cancelDanmakuRequests(); danmakuLoadGeneration++;
+  const generation = danmakuLoadGeneration;
+  danmakuResults.value = []; danmakuEpisodes.value = [];
+  if (art) await applyDanmakuRows([], playInfo.value?.episode_number ?? 1);
+  if (!owner.isCurrent() || generation !== danmakuLoadGeneration) return;
+  await loadDanmakuSourceConfig();
+  if (owner.isCurrent() && generation === danmakuLoadGeneration && art) await loadDanmuku();
+}
 const danmakuKeyword = ref('');
 const danmakuSearchSource = ref('360');
 const danmakuResults = ref([]);
@@ -287,7 +329,7 @@ const danmakuEpisodeOptions = computed(() => danmakuEpisodes.value.map((e, index
   value: index, label: `${e.number ? `第 ${e.number} 集 · ` : ''}${e.title}`
 })));
 async function danmakuRequest(path, options = {}) {
-  const response = await fetch(path, {...options, headers: {
+  const response = await fetch(path, {signal: path.startsWith('/danmu/subtitle-') ? undefined : danmakuRequestController.signal, ...options, headers: {
     Authorization: VueCookies.get('authorization') || '',
     ...(options.body ? {'Content-Type': 'application/json'} : {})
   }});
@@ -297,16 +339,17 @@ async function danmakuRequest(path, options = {}) {
   return data;
 }
 function openDanmakuSearch() {
-  art?.pause();
   if (art) art.setting.show = false;
   if (art?.fullscreen) art.fullscreen = false;
   if (art?.fullscreenWeb) art.fullscreenWeb = false;
   danmakuKeyword.value = playInfo.value?.tv_title || playInfo.value?.title || '';
   showDanmakuSearch.value = true;
+  void loadDanmakuSourceConfig();
 }
 async function searchDanmaku() {
   if (danmakuBusy.value) return;
   const episodeGuid = episode_guid.value;
+  const query = ++danmakuQueryGeneration;
   danmakuBusy.value = true;
   danmakuSearchError.value = '';
   danmakuSearchDone.value = false;
@@ -316,27 +359,28 @@ async function searchDanmaku() {
     const data = await danmakuRequest('/danmu/search?' + new URLSearchParams({
       keyword: danmakuKeyword.value.trim(), source: danmakuSearchSource.value
     }));
-    if (episodeGuid !== episode_guid.value) return;
+    if (episodeGuid !== episode_guid.value || query !== danmakuQueryGeneration) return;
     danmakuResults.value = data.results || [];
     danmakuSearchDone.value = true;
-  } catch (error) { if (episodeGuid === episode_guid.value) danmakuSearchError.value = errorText(error); }
-  finally { danmakuBusy.value = false; }
+  } catch (error) { if (episodeGuid === episode_guid.value && query === danmakuQueryGeneration && error.name !== 'AbortError') danmakuSearchError.value = errorText(error); }
+  finally { if (query === danmakuQueryGeneration) danmakuBusy.value = false; }
 }
 async function chooseDanmakuSource(source) {
   if (danmakuBusy.value) return;
   const episodeGuid = episode_guid.value;
+  const query = ++danmakuQueryGeneration;
   danmakuBusy.value = true;
   danmakuSearchError.value = '';
   danmakuEpisodes.value = [];
   danmakuSelectedSource.value = source;
   try {
     const data = await danmakuRequest('/danmu/episodes?' + new URLSearchParams({url: source.url}));
-    if (episodeGuid !== episode_guid.value) return;
+    if (episodeGuid !== episode_guid.value || query !== danmakuQueryGeneration) return;
     danmakuEpisodes.value = data.episodes || [];
     const matched = danmakuEpisodes.value.findIndex(e => String(e.number) === String(playInfo.value.episode_number ?? 1));
     danmakuSelectedEpisode.value = matched < 0 ? 0 : matched;
-  } catch (error) { if (episodeGuid === episode_guid.value) danmakuSearchError.value = errorText(error); }
-  finally { danmakuBusy.value = false; }
+  } catch (error) { if (episodeGuid === episode_guid.value && query === danmakuQueryGeneration && error.name !== 'AbortError') danmakuSearchError.value = errorText(error); }
+  finally { if (query === danmakuQueryGeneration) danmakuBusy.value = false; }
 }
 async function applyDanmakuRows(rows, episodeNumber) {
   const player = art, generation = danmakuLoadGeneration;
@@ -366,16 +410,26 @@ async function useDanmakuEpisode() {
     if (episodeGuid !== episode_guid.value || generation !== danmakuLoadGeneration) return;
     const rows = episodeDanmaku(json, episodeNumber);
     if (!rows.length) throw new Error('这个播放链接未返回弹幕，请选择其他平台或集数');
-    await danmakuRequest('/danmu/select', {method: 'POST', body: JSON.stringify({
-      guid: episodeGuid, parent_guid: parentGuid, url: selected.url
+    const mapping = {};
+    if (danmakuApplyScope.value === 'season') for (const row of danmakuEpisodes.value) {
+      if (/^\d{1,5}$/.test(String(row.number)) && !Object.hasOwn(mapping, String(row.number))) mapping[String(row.number)] = row.url;
+    }
+    if (danmakuApplyScope.value === 'season' && !Object.keys(mapping).length) throw new Error('当前来源没有可靠分集编号，只能应用当前集');
+    await danmakuRequest('/danmu/sources/preferences', {method: 'PUT', body: JSON.stringify({
+      scope: danmakuApplyScope.value, guid: episodeGuid, parent_guid: parentGuid, url: selected.url,
+      source_id: danmakuSelectedSource.value?.source_id || 'auto', fallback: false,
+      ...(danmakuApplyScope.value === 'season' ? {episodes: mapping} : {})
     })});
     if (episodeGuid !== episode_guid.value || generation !== danmakuLoadGeneration) return;
     await applyDanmakuRows(rows, episodeNumber);
+    if (episodeGuid !== episode_guid.value || generation !== danmakuLoadGeneration) return;
     await getVideoConfig();
-    void GetEmoji();
-    COMMON.ShowMsg(`当前集来源已保存，加载 ${rows.length} 条弹幕`);
-  } catch (error) { if (episodeGuid === episode_guid.value) danmakuSearchError.value = errorText(error); }
-  finally { danmakuBusy.value = false; }
+    if (episodeGuid !== episode_guid.value || generation !== danmakuLoadGeneration) return;
+    void GetEmoji(danmakuSelectedSource.value?.source_id || '');
+    activeDanmakuSource.value = danmakuSelectedSource.value?.source_id || '';
+    COMMON.ShowMsg(`个人${danmakuApplyScope.value === 'season' ? '季度' : '单集'}来源已保存，加载 ${rows.length} 条弹幕`);
+  } catch (error) { if (episodeGuid === episode_guid.value && generation === danmakuLoadGeneration && error.name !== 'AbortError') danmakuSearchError.value = errorText(error); }
+  finally { if (generation === danmakuLoadGeneration) danmakuBusy.value = false; }
 }
 const currentSubtitle = ref(null);
 const subtitleOffset = ref(0);
@@ -911,18 +965,23 @@ async function loadDanmuku() {
   art.layers.update(danmuTitleData.value)
   let episode_number = playInfo.value.episode_number === undefined ? 1 : playInfo.value.episode_number;
   let danmuku = `/danmu/get?${getDanmuparams()}`;
-  return fetch(danmuku)
-      .then(res => {
-        if (!res.ok) throw new Error(`弹幕服务返回 HTTP ${res.status}`);
-        return res.json();
+  return fetch(danmuku, {signal: danmakuRequestController.signal, headers: {Authorization: VueCookies.get('authorization') || ''}})
+      .then(async res => {
+        const json = await res.json();
+        if (!res.ok || (json?.code !== undefined && json.code !== 0)) throw new Error(json?.msg || `弹幕服务返回 HTTP ${res.status}`);
+        if (generation === danmakuLoadGeneration) activeDanmakuSource.value = res.headers.get('X-Danmaku-Source') || '';
+        return json;
       })
       .then(async json => {
         if (player !== art || generation !== danmakuLoadGeneration || episodeGuid !== episode_guid.value) return;
         const rows = episodeDanmaku(json, episode_number);
         await applyDanmakuRows(rows, episode_number);
+        if (player === art && generation === danmakuLoadGeneration) void GetEmoji(activeDanmakuSource.value);
       }).catch(err => {
     if (player !== art || generation !== danmakuLoadGeneration || episodeGuid !== episode_guid.value) return;
-    danmuTitleData.value.html = '弹幕加载失败，请检查服务日志';
+    if (err.name === 'AbortError') return;
+    danmuTitleData.value.html = '弹幕加载失败，可搜索其他来源或恢复自动匹配';
+    danmakuSearchError.value = errorText(err);
     COMMON.ShowMsg(errorText(err));
     art.layers.update(danmuTitleData.value)
   })
@@ -1199,15 +1258,16 @@ async function mediaP(req, playLink) {
   let res = await COMMON.requests("POST", api, true, data)
 }
 
-async function GetEmoji() {
+async function GetEmoji(sourceId = '') {
   const episode = episode_guid.value;
+  const generation = danmakuLoadGeneration;
   try {
-    let api = "/danmu/getEmoji?" + getDanmuparams()
-    let res = await fetch(api)
+    let api = "/danmu/getEmoji?" + getDanmuparams() + '&source_id=' + encodeURIComponent(sourceId)
+    let res = await fetch(api, {signal: danmakuRequestController.signal, headers: {Authorization: VueCookies.get('authorization') || ''}})
     let res_json = await res.json()
-    if (episode === episode_guid.value) emojos.value = res_json;
+    if (episode === episode_guid.value && generation === danmakuLoadGeneration) emojos.value = res_json;
   } catch {
-    if (episode === episode_guid.value) emojos.value = [];
+    if (episode === episode_guid.value && generation === danmakuLoadGeneration) emojos.value = [];
   }
 }
 
@@ -1589,6 +1649,8 @@ async function UpdateControl(_art) {
   await addArtConfig(_art, 'setting', {
     name: '搜索弹幕', html: '搜索弹幕', tooltip: '选择平台与集数', onClick: openDanmakuSearch
   });
+  await addArtConfig(_art, 'setting', {name: '弹幕来源', html: '弹幕来源与偏好', tooltip: activeDanmakuSourceName.value,
+    onClick: () => { if (controlsCurrent()) openDanmakuSources(); return activeDanmakuSourceName.value; }});
 
   await addArtConfig(_art, 'setting', {
     name: "跳过片头片尾",
@@ -1645,7 +1707,9 @@ async function play(options = null) {
   const playLink = urlBase.value;
   try {
     subtitleSwitchGeneration++;
+    cancelDanmakuRequests();
     danmakuLoadGeneration++;
+    activeDanmakuSource.value = '';
     showDanmakuSearch.value = false;
     danmakuResults.value = [];
     danmakuEpisodes.value = [];
@@ -1697,7 +1761,6 @@ async function play(options = null) {
 
     await GetPalyUrl(undefined, operation, currentAudio.value, options?.quality || null);
     operation.assertCurrent();
-    GetEmoji();
     if (art !== null && !options?.external) {
       watchPlaybackSource(art, url.value);
       await switchRecoverableSource(art, url.value, {signal: operation.signal, position: playInfo.value.watched_ts, paused: sourcePaused});
@@ -1826,6 +1889,7 @@ async function ready() {
   danmuConfig.value.loadedUntil = playInfo.value.watched_ts;
   art.layers.update(danmuTitleData.value)
   allDanmaku.value = [];
+  void loadDanmakuSourceConfig();
   void loadDanmuku()
   await GetSkipList();
   await getVideoConfig();
@@ -2052,6 +2116,9 @@ watch(() => accountState.revision, () => {
   showPreferenceReset.value = false;
   showMediaFiles.value = false;
   showDiagnostics.value = false;
+  showDanmakuSources.value = false;
+  danmakuSourceConfig.value = null;
+  cancelDanmakuRequests();
   diagnosticText.value = '';
   allMediaStreams.value = null;
   localSubtitleText = ''; localSubtitleName.value = '';
@@ -2118,6 +2185,7 @@ onBeforeRouteLeave(async (to, from) => {
 onBeforeUnmount(async () => {
   playerMounted = false;
   playerPreferences.clearAccount();
+  cancelDanmakuRequests();
   releaseExternalSession();
   initializationGeneration++;
   recoveryRun++;
@@ -2215,17 +2283,19 @@ onBeforeUnmount(() => {
       <n-text>当前集：{{ playInfo?.title }}<span v-if="playInfo?.episode_number"> · 第 {{ playInfo.episode_number }} 集</span></n-text>
       <n-input v-model:value="danmakuKeyword" placeholder="输入片名、别名，或粘贴具体集数的平台播放链接" :disabled="danmakuBusy" @keyup.enter="searchDanmaku" />
       <n-space :wrap="false">
-        <n-select v-model:value="danmakuSearchSource" :options="[{label: '360影视', value: '360'}, {label: '豆瓣', value: 'douban'}]"
+        <n-select v-model:value="danmakuSearchSource" :options="danmakuSearchChoices"
                   :disabled="danmakuBusy" style="width: 150px" />
         <n-button type="primary" @click="searchDanmaku" :loading="danmakuBusy" :disabled="!danmakuKeyword.trim()">查询弹幕来源</n-button>
       </n-space>
-      <n-text depth="3">先选择平台，再确认对应集数；保存仅替换当前集的弹幕来源。平台无资源或无弹幕时，可换来源或粘贴具体集数链接。</n-text>
+      <n-space align="center"><n-text>当前弹幕来源：{{ activeDanmakuSourceName }}</n-text><n-button @click="openDanmakuSources">来源管理／个人偏好</n-button></n-space>
+      <n-text depth="3">先选择平台与集数，再选择仅当前集或当前季度。季度绑定只使用明确分集编号，不猜测缺集；已有单集覆盖优先，失败时手动换源。配置只保存到当前账号，旧共享链接仍兼容读取。</n-text>
       <n-alert v-if="danmakuSearchError" type="error" :show-icon="false">{{ danmakuSearchError }}</n-alert>
       <n-empty v-if="danmakuSearchDone && !danmakuResults.length" description="未找到来源，请尝试别名、切换搜索来源或粘贴播放链接" />
       <div v-if="danmakuEpisodes.length" style="padding: 12px; border: 1px solid #8885; border-radius: 6px">
         <div style="margin-bottom: 8px">{{ danmakuSelectedSource?.title }} · {{ danmakuSelectedSource?.platform }}</div>
         <n-select v-model:value="danmakuSelectedEpisode" :options="danmakuEpisodeOptions" :disabled="danmakuBusy" />
-        <n-button style="margin-top: 12px" type="primary" @click="useDanmakuEpisode" :loading="danmakuBusy">保存并加载到当前集</n-button>
+        <n-select v-model:value="danmakuApplyScope" style="margin-top:12px" :disabled="danmakuBusy" :options="[{label:'仅当前集',value:'episode'},{label:'当前季度（按来源分集编号）',value:'season'}]" />
+        <n-button style="margin-top: 12px" type="primary" @click="useDanmakuEpisode" :loading="danmakuBusy">保存个人来源并加载</n-button>
       </div>
       <div v-for="(result, index) in danmakuResults" :key="result.url + index" style="padding: 12px; border: 1px solid #8885; border-radius: 6px">
         <n-space justify="space-between" align="center">
@@ -2235,6 +2305,9 @@ onBeforeUnmount(() => {
       </div>
     </n-space>
   </n-modal>
+
+  <DanmakuSourcesDialog v-if="showDanmakuSources" :key="`${accountState.revision}:${episode_guid}`" :request="danmakuRequest"
+    :episode-guid="episode_guid" :parent-guid="guid" @close="showDanmakuSources = false" @saved="reloadDanmakuSources" />
 
   <n-modal v-model:show="showSubtitleSearch" title="搜索与选择字幕" preset="card"
            :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">

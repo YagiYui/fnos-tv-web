@@ -8,7 +8,7 @@ const queue=[];const calls=[];
 const state={episode_guid:ref('episode-one'),guid:ref('season'),playInfo:ref({episode_number:2}),
  danmakuKeyword:ref('Fixture'),danmakuSearchSource:ref('360'),danmakuResults:ref([]),danmakuEpisodes:ref([]),
  danmakuSelectedEpisode:ref(null),danmakuSelectedSource:ref(null),danmakuBusy:ref(false),danmakuSearchDone:ref(false),danmakuSearchError:ref(''),
- danmakuLoadGeneration:0,allDanmaku:ref({}),danmuConfig:ref({loadedUntil:0}),lastDanmuLoadedUntil:-1,
+ danmakuQueryGeneration:0,danmakuRequestController:new AbortController(),danmakuApplyScope:ref('episode'),activeDanmakuSource:ref(''),danmakuLoadGeneration:0,allDanmaku:ref({}),danmuConfig:ref({loadedUntil:0}),lastDanmuLoadedUntil:-1,
  danmuTitleData:ref({}),episodeDanmaku,errorText:e=>e.message,URLSearchParams,
  VueCookies:{get:()=> 'fixture-token'},COMMON:{ShowMsg(){}},getVideoConfig:async()=>{},GetEmoji:async()=>{},
  art:{currentTime:55,layers:{update(){}},plugins:{artplayerPluginDanmuku:{config(){},load:async(...args)=>{queue.push(args)}}}},
@@ -21,7 +21,7 @@ vm.createContext(state);vm.runInContext(src.slice(src.indexOf('async function da
 await state.searchDanmaku();assert.equal(state.danmakuResults.value.length,1);
 await state.chooseDanmakuSource(state.danmakuResults.value[0]);assert.equal(state.danmakuSelectedEpisode.value,1,'Prefer current episode');
 await state.useDanmakuEpisode();assert.equal(state.allDanmaku.value['2'][0].text,'earlier');assert.equal(state.danmuConfig.value.loadedUntil,54);
-const saved=calls.find(([p])=>p==='/danmu/select');assert.equal(JSON.parse(saved[1].body).guid,'episode-one');assert.equal(JSON.parse(saved[1].body).url,'https://video.example/ep2');
+const saved=calls.find(([p])=>p==='/danmu/sources/preferences');assert.equal(JSON.parse(saved[1].body).guid,'episode-one');assert.equal(JSON.parse(saved[1].body).url,'https://video.example/ep2');
 assert.equal(saved[1].headers.Authorization,'fixture-token');assert.equal(queue[0].length,0,'No argument clears the old plugin queue');
 let finish;state.fetch=()=>new Promise(r=>finish=r);const old=state.searchDanmaku();state.episode_guid.value='episode-two';state.danmakuResults.value=[];
 finish({ok:true,json:async()=>({code:0,results:[{title:'stale'}]})});await old;assert.equal(state.danmakuResults.value.length,0);

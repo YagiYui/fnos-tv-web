@@ -64,7 +64,7 @@ function player() {
   const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController, loadPlayerPreferences() {},
     choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback,
     preferredSubtitleLanguage: {value:''}, preferredQuality: {value:'highest'},
-    allMediaStreams: {value: null}, subtitleOffset: {value: 0}, subtitleBottom: {value: 10}, subtitleOutline: {value: 2}, assRenderer: {setOffset(){}}, pgsRenderer: {setOffset(){}}, localSubtitleText: '', localSubtitleName: {value: ''}, recoveryState: {value: null}, recoveryBusy: {value: false}, recoveryRun: 0,
+    cancelDanmakuRequests() {},activeDanmakuSource:{value:''},allMediaStreams: {value: null}, subtitleOffset: {value: 0}, subtitleBottom: {value: 10}, subtitleOutline: {value: 2}, assRenderer: {setOffset(){}}, pgsRenderer: {setOffset(){}}, localSubtitleText: '', localSubtitleName: {value: ''}, recoveryState: {value: null}, recoveryBusy: {value: false}, recoveryRun: 0,
     sourceTimer: null, sourceEpisode: null, sourcePosition: null, sourcePaused: false,
     clearTimeout() {}, clearPlaybackRecovery() { ctx.recoveryState.value = null; },
     reportPlaybackFailure(error, snapshot) { ctx.recoveryState.value = {...snapshot, message: error.message}; },

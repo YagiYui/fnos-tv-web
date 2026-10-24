@@ -27,7 +27,7 @@ disposeGestures.refresh = () => events.push('refresh-gestures');
 const ctx = vm.createContext({ref, shallowRef: ref, useBrowseSnapshots: () => account, GESTURE_HOLD_RATES,
   QUALITY_PREFERENCES, subtitleLanguageChoices, subtitleLanguageLabel,
   externalChoices: externalPlayerChoices('Windows'), effectiveExternalPlayer: ref(''), preferredExternalLabel: ref('每次选择'),
-  showMediaFiles: ref(false), showDiagnostics: ref(false), diagnosticText: ref(''), allMediaStreams: ref(null), localSubtitleText: '', localSubtitleName: ref(''), selectedMediaLabel: ref('文件'), subtitleOffset: ref(0), subtitleBottom: ref(10), subtitleOutline: ref(2), showModal: ref(false), externalMediaUrl: ref(''),
+  showDanmakuSources:ref(false),danmakuSourceConfig:ref(null),cancelDanmakuRequests(){},activeDanmakuSourceName:ref('来源'),showMediaFiles: ref(false), showDiagnostics: ref(false), diagnosticText: ref(''), allMediaStreams: ref(null), localSubtitleText: '', localSubtitleName: ref(''), selectedMediaLabel: ref('文件'), subtitleOffset: ref(0), subtitleBottom: ref(10), subtitleOutline: ref(2), showModal: ref(false), externalMediaUrl: ref(''),
   disposeMobileGestures: disposeGestures,
   createPlayerPreferenceStore: () => createPlayerPreferenceStore(() => storage),
   COMMON: {ShowMsg: value => notices.push(value), fnHost: '/fnos'}, art: makePlayer(),
