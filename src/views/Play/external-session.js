@@ -5,7 +5,7 @@ import {streamSubtitleGuid} from './subtitle.js';
 // An external player owns a separate server session; ordinary web retries must not quit it.
 export async function createExternalSession(requests, episode, {signal, position, audioGuid, subtitleGuid, quality, maxAudioChannels = 2, preferFile = false} = {}) {
   const metadata = await loadPlaybackMetadata(requests, episode, {signal});
-  if (preferFile) return {media_guid: primaryMediaFile(metadata.streams).guid};
+  if (preferFile) return {item_guid: metadata.info.item.guid, media_guid: primaryMediaFile(metadata.streams).guid};
   const audio = chooseAudio(metadata.streams.audio_streams, audioGuid ?? metadata.info.item.audio_guid, '');
   const selected = metadata.qualities.find(item => item.resolution === quality?.resolution && Number(item.bitrate) === Number(quality?.bitrate)) || metadata.qualities[0];
   const subtitle = subtitleGuid === '' ? null : metadata.streams.subtitle_streams?.find(item => item.guid === (subtitleGuid ?? metadata.info.item.subtitle_guid));
