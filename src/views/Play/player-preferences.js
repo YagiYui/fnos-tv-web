@@ -1,7 +1,9 @@
 // Account-scoped preferences; transient playback state is never persisted here.
+import {GESTURE_HOLD_RATES} from './gesture-settings.js';
 export const PLAYER_PREFERENCE_DEFAULTS = Object.freeze({
   audioLanguage: '', autoPlayNext: true, assSubtitles: true,
   subtitleFontSize: 20, playbackRate: 1, use302: false,
+  gesturesEnabled: true, gestureHoldRate: 2,
 });
 
 const validators = {
@@ -11,6 +13,8 @@ const validators = {
   subtitleFontSize: value => Number.isInteger(value) && value >= 12 && value <= 60,
   playbackRate: value => typeof value === 'number' && Number.isFinite(value) && value >= 0.5 && value <= 3,
   use302: value => typeof value === 'boolean',
+  gesturesEnabled: value => typeof value === 'boolean',
+  gestureHoldRate: value => GESTURE_HOLD_RATES.includes(value),
 };
 
 function validateName(name) {

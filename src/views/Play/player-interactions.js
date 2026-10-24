@@ -1,3 +1,5 @@
+import {normalizeGestureSettings} from './gesture-settings.js';
+
 // Fullscreen navigation is shared by the on-screen back button and router guard.
 export function exitPlayerFullscreen(art) {
   if (!art || !(art.fullscreen || art.fullscreenWeb)) return false;
@@ -28,7 +30,7 @@ function point(player, touch, rotated) {
     : {x: touch.clientX - rect.left, y: touch.clientY - rect.top, width: rect.width, height: rect.height};
 }
 
-export function installMobileGestures(art, win = window, doc = document) {
+export function installMobileGestures(art, win = window, doc = document, {getPreferences = () => null} = {}) {
   const player = art.template.$player;
   if (!player.classList.contains('fnos-touch-player')) return () => {};
   const video = art.template.$video;
@@ -40,10 +42,16 @@ export function installMobileGestures(art, win = window, doc = document) {
   player.append(hud);
   let session = null, holdTimer = 0, hideTimer = 0, suppressUntil = 0, brightness = 1;
   const initialFilter = video.style.filter;
-  const active = () => Boolean(art.fullscreen || art.fullscreenWeb);
+  let disposed = false;
+  const preferences = () => {
+    try { return normalizeGestureSettings(getPreferences()); }
+    catch { return normalizeGestureSettings(null); }
+  };
+  const active = () => !disposed && preferences().enabled && Boolean(art.fullscreen || art.fullscreenWeb);
   function show(text) { win.clearTimeout(hideTimer); hud.textContent = text; hud.hidden = false; }
   function finish() {
     win.clearTimeout(holdTimer);
+    win.clearTimeout(hideTimer);
     if (session?.mode === 'speed') {
       art.playbackRate = session.rate;
       art.fnosTemporarySpeed = false;
@@ -62,10 +70,10 @@ export function installMobileGestures(art, win = window, doc = document) {
     session = {...p, id: event.touches[0].identifier, mode: '', volume: art.volume,
       brightness, time: art.currentTime, rate: art.playbackRate, seek: art.currentTime};
     holdTimer = win.setTimeout(() => {
-      if (!session || session.mode || !art.playing || art.isLock) return;
+      if (!session || session.mode || !active() || !art.playing || art.isLock) return;
       session.mode = 'speed';
       art.fnosTemporarySpeed = true;
-      art.playbackRate = Math.max(2, session.rate);
+      art.playbackRate = Math.max(preferences().holdRate, session.rate);
       show(`${art.playbackRate}× 加速播放 · 松手恢复`);
     }, 450);
   }
@@ -121,7 +129,9 @@ export function installMobileGestures(art, win = window, doc = document) {
   doc.addEventListener('visibilitychange', cancel);
   art.on('fullscreen', changed); art.on('fullscreenWeb', changed);
   art.on('video:pause', cancel); art.on('video:ended', cancel); art.on('video:loadstart', cancel);
-  return () => {
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
     finish(); win.clearTimeout(hideTimer);
     for (const [name, fn] of events) player.removeEventListener(name, fn, true);
     win.removeEventListener('blur', cancel); win.removeEventListener('resize', cancel);
@@ -129,5 +139,12 @@ export function installMobileGestures(art, win = window, doc = document) {
     art.off('fullscreen', changed); art.off('fullscreenWeb', changed);
     art.off('video:pause', cancel); art.off('video:ended', cancel); art.off('video:loadstart', cancel);
     video.style.filter = initialFilter; hud.remove();
+  }
+  dispose.refresh = () => {
+    if (disposed) return;
+    finish();
+    hud.hidden = true;
+    if (!preferences().enabled) { brightness = 1; video.style.filter = initialFilter; }
   };
+  return dispose;
 }
