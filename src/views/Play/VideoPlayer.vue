@@ -28,6 +28,7 @@ import {PreferenceSync} from '../../preference-sync.js';
 import {personalRequest} from '../../personal-api.js';
 import {GESTURE_HOLD_RATES} from './gesture-settings.js';
 import {createSleepTimer, pictureInPictureAvailable, togglePictureInPicture} from './sleep-timer.js';
+import {groupPlayerSettings, installPictureInPictureOverlays} from './player-settings.js';
 import {QUALITY_PREFERENCES, choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback, subtitleLanguageChoices, subtitleLanguageLabel} from './media-preferences.js';
 import {useBrowseSnapshots} from '../../store.js';
 const playbackSession = new PlaybackSession();
@@ -1739,7 +1740,7 @@ async function UpdateControl(_art) {
       return use_302_play.value;
     },
   })
-
+  groupPlayerSettings(_art);
 }
 
 async function play(options = null) {
@@ -2115,6 +2116,7 @@ const dynamicInputCreateByUrl = () => {
 }
 
 async function getInstance(_art) {
+  installPictureInPictureOverlays(_art);
   const gestureOwner = preferenceHandle;
   autoplayCountdown.cancel();
   autoplayPanel = null;

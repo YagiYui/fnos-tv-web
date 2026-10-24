@@ -61,6 +61,8 @@ export class SubtitleOverlay {
         onReady: () => {
           clearTimeout(timeout);
           if (generation !== this.generation) return resolve(false);
+          this.instance?.canvas?.classList?.add('fnos-subtitle-overlay');
+          this.instance?.canvasParent?.classList?.add('fnos-subtitle-overlay');
           ready = true;
           this.cancel = null;
           resolve(true);
@@ -84,6 +86,8 @@ export class SubtitleOverlay {
       const instance = new Renderer(options);
       if (generation !== this.generation) { instance.dispose(); return resolve(false); }
       this.instance = instance;
+      instance.canvas?.classList?.add('fnos-subtitle-overlay');
+      instance.canvasParent?.classList?.add('fnos-subtitle-overlay');
       if (this.kind === 'ass') instance.canvas?.classList.add('fnos-ass-canvas');
       if (instance.canvasParent) {
         instance.canvasParent.style.pointerEvents = 'none';

@@ -57,3 +57,10 @@ await assert.rejects(waitForAssSubtitle(async()=>({pending:true}),()=>true,{paus
 const pgs=new AssRenderer({kind:'pgs',load:async()=>Fake});
 const imageSub=pgs.show({},'/danmu/subtitle-pgs-file/fixture');await Promise.resolve();await Promise.resolve();
 assert.equal(options.subUrl,'/danmu/subtitle-pgs-file/fixture');assert.equal(options.subContent,undefined);options.onLoaded();assert.equal(await imageSub,true);pgs.clear();
+// PGS creates its canvas asynchronously directly in the video parent. Never tag the whole player.
+let delayedInstance;
+class DelayedCanvas {constructor(opts){options=opts;delayedInstance=this;} dispose(){}}
+const delayed = new AssRenderer({kind:'pgs',load:async()=>DelayedCanvas});
+const delayedReady=delayed.show({},'/fixture.sup');await Promise.resolve();await Promise.resolve();
+const tags=[];delayedInstance.canvas={classList:{add:tag=>tags.push(tag)},parentElement:{classList:{add:()=>{throw new Error('Player parent must stay visible');}}}};
+options.onLoaded();assert.equal(await delayedReady,true);assert.ok(tags.includes('fnos-subtitle-overlay'));delayed.clear();

@@ -62,17 +62,25 @@ watch(() => [props.mobile, props.perView, props.items.map(item => item.guid).joi
 <template>
     <div class="mobile-carousel-gesture" @touchstart.passive="touchStart" @touchmove.passive="touchMove"
          @touchend.passive="touchEnd" @touchcancel="swipe = null" @click.capture="guardSwipeClick">
-    <n-carousel ref="carousel" :show-dots="false" :show-arrow="hasMouse && pages.length > 1" :loop="false" :touchable="false" :draggable="hasMouse"
+    <n-carousel ref="carousel" :show-dots="false" :show-arrow="false" :loop="false" :touchable="false" :draggable="hasMouse"
                 :slides-per-view="1" :space-between="18" @update:current-index="current = $event">
       <div v-for="(page, index) in pages" :key="index" class="mobile-carousel-page" :style="{'--page-columns': perView}">
         <slot v-for="item in page" :key="item.guid" :item="item" />
       </div>
     </n-carousel>
     </div>
-    <CarouselPagination v-if="showPagination" :current="current" :count="pages.length" @change="carousel?.to($event)" />
+    <div v-if="pages.length > 1" class="carousel-footer">
+      <CarouselPagination :current="current" :count="pages.length" @change="carousel?.to($event)" />
+      <div v-if="hasMouse" class="carousel-arrows">
+        <n-button secondary circle aria-label="上一组影片" :disabled="current === 0" @click="carousel?.to(current - 1)"><i class="bx bx-chevron-left" /></n-button>
+        <n-button secondary circle aria-label="下一组影片" :disabled="current >= pages.length - 1" @click="carousel?.to(current + 1)"><i class="bx bx-chevron-right" /></n-button>
+      </div>
+    </div>
 </template>
 
 <style scoped>
 .mobile-carousel-gesture{touch-action:pan-y pinch-zoom}
 .mobile-carousel-page{display:grid;grid-template-columns:repeat(var(--page-columns),minmax(0,1fr));gap:18px;align-items:start}
+.carousel-footer{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-top:12px;min-height:36px}
+.carousel-footer>:first-child{grid-column:2;margin:0}.carousel-arrows{justify-self:end;display:flex;gap:10px}
 </style>

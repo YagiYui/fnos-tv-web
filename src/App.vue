@@ -12,7 +12,8 @@ import {invalidateMediaCaches} from './media-state-cache.js';
 import {useHomePreferences,orderedLibraries} from './home-preferences.js';
 
 import {useMediaDbData, useMediaSearch, useLibraryViews, useBrowseSnapshots} from './store.js'
-import {useRoute} from "vue-router";
+import {useRoute, useRouter} from "vue-router";
+const router = useRouter();
 
 const MediaDbData = useMediaDbData()
 const mediaSearch = useMediaSearch();
@@ -221,9 +222,7 @@ function handleSelect(key) {
     VueCookies.remove("authorization");
     VueCookies.remove("Trim-MC-token");
     COMMON.ShowMsg("注销登录成功！")
-    setTimeout(function () {
-      location.reload();
-    }, 1000)
+    void router.replace('/login');
   }
 }
 
@@ -239,7 +238,8 @@ async function onMountedFun() {
     try {
       await getConfig().catch(() => {});
       document.title = title.value;
-      if (!VueCookies.get('authorization') || route.path === '/login') return;
+      if (route.path === '/login') return;
+      if (!VueCookies.get('authorization')) { await router.replace('/login'); return; }
       await GetUserInfo();
       const account = UserInfo.value?.guid || UserInfo.value?.uid || UserInfo.value?.username;
       if (!account) throw new Error('未获取到有效的用户信息');
@@ -265,6 +265,7 @@ async function onMountedFun() {
       load.value = false;
     } catch (error) {
       COMMON.ShowMsg(error?.message || '加载失败，请刷新重试');
+      if (!initializedAccount) await router.replace('/login');
     } finally {
       load.value = false;
     }
@@ -392,7 +393,7 @@ watch(
                 </div>
               </n-layout-sider>
               <n-layout ref="contentLayout" :native-scrollbar="false" :class="{ 'mobile-content': isMobile }" @scroll="contentScrollTop = $event.target.scrollTop">
-                <PageBack v-if="route.path === '/list'" />
+                <PageBack v-if="['/list', '/watchlist'].includes(route.path)" />
                 <router-view/>
               </n-layout>
             </n-layout>

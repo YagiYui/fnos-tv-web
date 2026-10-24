@@ -5,7 +5,7 @@ import {ref, computed, nextTick, watch, effectScope} from 'vue';
 
 const app = fs.readFileSync(new URL('./src/App.vue', import.meta.url), 'utf8');
 const removed = [], messages = [], apiCalls = [], timers = [];
-let searchAccount = 'fixture-viewer', cacheClears = 0, historyClears = 0, reloads = 0;
+let searchAccount = 'fixture-viewer', cacheClears = 0, historyClears = 0, redirected = '';
 let versionResult = {version: '0.9.8'};
 const COMMON = {userKey: 'fixture-viewer', ShowMsg: text => messages.push(text),
   requests: async (...args) => { apiCalls.push(args); return versionResult; }};
@@ -17,7 +17,7 @@ const context = vm.createContext({COMMON, MediaDbData: media, data: ref(media.li
   mediaActions: {setAccount() {}},
   browseSnapshots: {setAccount: value => { assert.equal(value, ''); }},
   catalogCache: {clear: () => { cacheClears++; }}, VueCookies: {remove: name => removed.push(name)},
-  setTimeout: callback => { timers.push(callback); }, location: {reload: () => { reloads++; }}});
+  router: {replace: async path => { redirected = path; }}, setTimeout: callback => { timers.push(callback); }});
 const handlers = app.slice(app.indexOf('async function getServiceVersion()'), app.indexOf('async function GetMediaDbList()')) +
   app.slice(app.indexOf('function handleSelect('), app.indexOf('async function runFunByPath('));
 vm.runInContext(handlers, context);
@@ -31,8 +31,8 @@ assert.deepEqual(removed, ['authorization', 'Trim-MC-token']);
 assert.equal(searchAccount, ''); assert.equal(cacheClears, 1);
 assert.equal(Object.keys(media.info).length, 0); assert.equal(media.list.length, 0);
 assert.equal(context.data.value.length, 0); assert.equal(Object.keys(context.UserInfo.value).length, 0);
-assert.equal(COMMON.userKey, undefined); assert.equal(timers.length, 1);
-timers[0](); assert.equal(reloads, 1);
+assert.equal(COMMON.userKey, undefined); assert.equal(timers.length, 0);
+assert.equal(redirected, '/login', 'Logout navigates immediately, including an empty account state');
 
 const component = fs.readFileSync(new URL('./src/components/AccountMenu.vue', import.meta.url), 'utf8')
   .split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm, '');
