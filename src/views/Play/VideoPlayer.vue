@@ -10,7 +10,7 @@ import sortedIndexBy from 'lodash-es/sortedIndexBy'
 import artplayerPluginDanmuku from "artplayer-plugin-danmuku";
 import axios from "axios";
 import {createBlobVTTUrl, SegmentedSubtitleLoader, subtitleOptions, bindSubtitleTrack, subtitleSearchResults, downloadSubtitle, isPgsSubtitle, streamSubtitleGuid} from "./subtitle.js"
-import {episodeDanmaku, errorText} from '../../compat.js';
+import {episodeDanmaku, danmakuEpisodeNumber, errorText} from '../../compat.js';
 import {SubtitleOverlay, waitForAssSubtitle} from './ass-renderer.js';
 import {playbackTitle, playbackSelection, nextEpisode, previousEpisode} from './player-presentation.js';
 import {renderDanmaku} from './danmaku-renderer.js';
@@ -27,6 +27,7 @@ import {createPlayerPreferenceStore, PLAYER_PREFERENCE_DEFAULTS} from './player-
 import {PreferenceSync} from '../../preference-sync.js';
 import {personalRequest} from '../../personal-api.js';
 import {GESTURE_HOLD_RATES} from './gesture-settings.js';
+import {createSleepTimer, pictureInPictureAvailable, togglePictureInPicture} from './sleep-timer.js';
 import {QUALITY_PREFERENCES, choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback, subtitleLanguageChoices, subtitleLanguageLabel} from './media-preferences.js';
 import {useBrowseSnapshots} from '../../store.js';
 const playbackSession = new PlaybackSession();
@@ -83,6 +84,18 @@ const preferredSubtitleLanguage = ref(preferenceHandle.read('subtitleLanguage'))
 const preferredQuality = ref(preferenceHandle.read('qualityPreference'));
 const preferredExternalPlayer = ref(preferenceHandle.read('externalPlayer'));
 const stopAfterCurrent = ref(false);
+const showSleepTimer = ref(false), sleepChoice = ref(30), sleepStatus = ref('未启用');
+const sleepOptions = [{label:'关闭定时',value:0},{label:'播完本集停止',value:-1},...[15,30,60,90,120].map(value=>({label:`${value} 分钟后停止`,value}))];
+const sleepTimer = createSleepTimer({
+  onStop: () => { autoplayCountdown.cancel(); art?.pause(); void SendPlayRecord(); COMMON.ShowMsg('睡眠定时已停止播放，自动连播已暂停'); },
+  onChange: state => { sleepStatus.value = state.expired ? '已停止，自动连播暂停' : state.mode === 'episode' ? '播完本集停止' : state.mode === 'timer' ? `剩余 ${Math.ceil(state.remaining/60)} 分钟` : '未启用'; }
+});
+function applySleepTimer() {
+  sleepTimer.set(sleepChoice.value); autoplayCountdown.cancel(); showSleepTimer.value = false;
+}
+function leavePictureInPicture() {
+  if (document.pictureInPictureElement === art?.video) void document.exitPictureInPicture().catch(()=>{});
+}
 let autoplayPanel = null, autoplayText = null;
 const autoplayCountdown = createAutoplayCountdown(remaining => {
   if (!art) return;
@@ -99,7 +112,7 @@ const autoplayCountdown = createAutoplayCountdown(remaining => {
   }
   autoplayPanel.hidden = false;
   autoplayText.textContent = `${remaining} 秒后播放下一集 `;
-}, () => play_next());
+}, () => { if (sleepTimer.allowsAutoplay()) play_next(); });
 
 let art = null;
 const guid = ref(null);
@@ -283,6 +296,7 @@ const playUrl = ref(null);
 const skipList = ref([])
 const seasonConfig = ref({})
 const showSetUp = ref(false)
+const canEditSharedConfig = ref(false);
 const timerSendPlayRecord = ref(null);
 const emojos = ref(null);
 const allDanmaku = ref({})
@@ -323,7 +337,7 @@ async function reloadDanmakuSources() {
   cancelDanmakuRequests(); danmakuLoadGeneration++;
   const generation = danmakuLoadGeneration;
   danmakuResults.value = []; danmakuEpisodes.value = [];
-  if (art) await applyDanmakuRows([], playInfo.value?.episode_number ?? 1);
+  if (art) await applyDanmakuRows([], danmakuEpisodeNumber(playInfo.value));
   if (!owner.isCurrent() || generation !== danmakuLoadGeneration) return;
   await loadDanmakuSourceConfig();
   if (owner.isCurrent() && generation === danmakuLoadGeneration && art) await loadDanmuku();
@@ -391,7 +405,7 @@ async function chooseDanmakuSource(source) {
     const data = await danmakuRequest('/danmu/episodes?' + new URLSearchParams({url: source.url}));
     if (episodeGuid !== episode_guid.value || query !== danmakuQueryGeneration) return;
     danmakuEpisodes.value = data.episodes || [];
-    const matched = danmakuEpisodes.value.findIndex(e => String(e.number) === String(playInfo.value.episode_number ?? 1));
+    const matched = danmakuEpisodes.value.findIndex(e => String(e.number) === String(danmakuEpisodeNumber(playInfo.value)));
     danmakuSelectedEpisode.value = matched < 0 ? 0 : matched;
   } catch (error) { if (episodeGuid === episode_guid.value && query === danmakuQueryGeneration && error.name !== 'AbortError') danmakuSearchError.value = errorText(error); }
   finally { if (query === danmakuQueryGeneration) danmakuBusy.value = false; }
@@ -415,7 +429,7 @@ async function useDanmakuEpisode() {
   if (!selected || danmakuBusy.value) return;
   const episodeGuid = episode_guid.value;
   const parentGuid = guid.value;
-  const episodeNumber = playInfo.value.episode_number ?? 1;
+  const episodeNumber = danmakuEpisodeNumber(playInfo.value);
   danmakuBusy.value = true;
   danmakuSearchError.value = '';
   const generation = ++danmakuLoadGeneration;
@@ -887,7 +901,7 @@ const setting = ref({
   autoMini: true, // 当播放器滚动到浏览器视口以外时，自动进入 迷你播放 模式
   screenshot: !/Android|webOS|iPhone|iPod|BlackBerry/i.test(navigator.userAgent),
   setting: true,
-  loop: true,
+  loop: false,
   flip: false,    // 是否显示视频翻转功能，目前只出现在 设置面板 和 右键菜单 里
   playbackRate: false,
   aspectRatio: true,
@@ -961,7 +975,7 @@ const debounce = (fn, delay) => {
 }
 
 function getDanmuparams() {
-  let episode_number = playInfo.value.episode_number === undefined ? 1 : playInfo.value.episode_number;
+  let episode_number = danmakuEpisodeNumber(playInfo.value);
   let episode_title = playInfo.value.title;
   let season = playInfo.value.type !== "Movie";
   let title = season ? playInfo.value.tv_title : playInfo.value.title
@@ -980,7 +994,7 @@ async function loadDanmuku() {
   const episodeGuid = episode_guid.value;
   danmuTitleData.value.html = `弹幕加载中...`
   art.layers.update(danmuTitleData.value)
-  let episode_number = playInfo.value.episode_number === undefined ? 1 : playInfo.value.episode_number;
+  let episode_number = danmakuEpisodeNumber(playInfo.value);
   let danmuku = `/danmu/get?${getDanmuparams()}`;
   return fetch(danmuku, {signal: danmakuRequestController.signal, headers: {Authorization: VueCookies.get('authorization') || ''}})
       .then(async res => {
@@ -1133,7 +1147,7 @@ async function GetPalyUrlBy302(operation = null) {
   if (!regex.test(remote?.path || '')) return;
   if (remote !== null && remote !== undefined && use_302_play.value) {
     let _data = {
-      path: remote.path
+      path: remote.path, item_guid: episode_guid.value, media_guid: remote.guid
     }
     let res = await axios.get("/api/play", {
       signal: operation?.signal,
@@ -1180,7 +1194,12 @@ async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation 
     url.value = COMMON.fnHost + res.play_link;
     playUrl.value = window.location.origin + url.value
     if (use_302_play.value) {
-      await GetPalyUrlBy302(operation);
+      try { await GetPalyUrlBy302(operation); }
+      catch (error) {
+        operation?.assertCurrent();
+        if (isPlaybackAbort(error)) throw error;
+        COMMON.ShowMsg('远程直链暂时不可用，已使用飞牛播放链接');
+      }
     }
   } else {
     throw new Error('播放链接获取失败，请切换清晰度或重试');
@@ -1289,6 +1308,7 @@ async function GetEmoji(sourceId = '') {
 }
 
 async function putVideoConfig() {
+  if (!canEditSharedConfig.value) return;
   let sendData = {
     list: [],
     url: []
@@ -1334,12 +1354,15 @@ async function putVideoConfig() {
 
 async function getVideoConfig() {
   const episode = episode_guid.value, season = guid.value;
+  const account = VueCookies.get('authorization');
+  canEditSharedConfig.value = false;
   try {
     let api = "/api/videoConfig?episode_guid=" + episode_guid.value + "&guid=" + guid.value
     let res = await axios.get(api, {headers: {Authorization: VueCookies.get("authorization")}})
-    if (episode !== episode_guid.value || season !== guid.value) return;
+    if (episode !== episode_guid.value || season !== guid.value || account !== VueCookies.get('authorization')) return;
     if (!Array.isArray(res.data?.list) || !Array.isArray(res.data?.url)) throw new Error('播放配置返回格式异常');
     seasonConfig.value = res.data;
+    canEditSharedConfig.value = res.data.permissions?.edit_shared === true;
     skipList.value = seasonConfig.value.list
   } catch (err) {
   }
@@ -1648,6 +1671,12 @@ async function UpdateControl(_art) {
       return stopAfterCurrent.value;
     }
   });
+  await addArtConfig(_art, 'setting', {name:'睡眠定时',html:'睡眠定时',tooltip:sleepStatus.value,
+    onClick:()=>{ if(controlsCurrent()) {showSleepTimer.value=true;_art.setting.show=false;} }});
+  if (pictureInPictureAvailable(_art.video, document)) {
+    await addArtConfig(_art, 'setting', {name:'画中画',html:'进入 / 退出画中画',tooltip:'仅视频画面，不含网页字幕与弹幕',
+      onClick:()=>{ if(controlsCurrent()) void togglePictureInPicture(_art.video,document).catch(()=>COMMON.ShowMsg('浏览器未能进入画中画，请检查权限或退出全屏后重试')); }});
+  }
   await addArtConfig(_art, 'setting', {
     name: 'ASS特效字幕', html: 'ASS 特效字幕', tooltip: useAssSubtitles.value ? '原始样式' : '普通字幕',
     switch: useAssSubtitles.value,
@@ -1785,6 +1814,8 @@ async function play(options = null) {
       watchPlaybackSource(art, url.value);
       await switchRecoverableSource(art, url.value, {signal: operation.signal, position: playInfo.value.watched_ts, paused: sourcePaused});
       operation.assertCurrent();
+      sleepTimer.check();
+      if (sleepTimer.state().expired) art.pause();
     }
     if (!options?.external) {
       clearPlaybackRecovery();
@@ -1988,7 +2019,7 @@ const artF = async (data) => {
     }
 
     // 弹幕分段加载
-    let episode_number = playInfo.value.episode_number === undefined ? 1 : playInfo.value.episode_number;
+    let episode_number = danmakuEpisodeNumber(playInfo.value);
     if (episode_number in allDanmaku.value) {
       let danmuList = allDanmaku.value[episode_number];
       if (currentTime >= danmuConfig.value.loadedUntil) {
@@ -2024,8 +2055,9 @@ const artF = async (data) => {
   });
 
   art.on('video:ended', () => {
+    sleepTimer.ended();
     void SendPlayRecord();
-    if (autoPlayNext.value && !stopAfterCurrent.value && nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value)) {
+    if (autoPlayNext.value && !stopAfterCurrent.value && sleepTimer.allowsAutoplay() && nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value)) {
       autoplayCountdown.start();
     }
   });
@@ -2129,6 +2161,7 @@ const onMountedFun = async () => {
 const playbackError = ref('');
 let playerMounted = false;
 watch(() => accountState.revision, () => {
+  sleepTimer.cancel(); showSleepTimer.value = false; leavePictureInPicture(); canEditSharedConfig.value = false;
   // Never reuse a handle after an account transition, even A -> B -> A.
   preferenceHandle = playerPreferences.bindAccount(accountState.account);
   bindPlayerPreferenceSync();
@@ -2175,6 +2208,7 @@ watch(() => accountState.revision, () => {
 }, {flush: 'sync'});
 
 onBeforeRouteUpdate(async (to, from) => {
+  sleepTimer.cancel(); showSleepTimer.value = false;
   if (to.query.guid !== from.query.guid) bindPlayerPreferenceSync();
   releaseExternalSession();
   externalBusy.value = false;
@@ -2205,6 +2239,7 @@ onBeforeRouteLeave(async (to, from) => {
 });
 
 onBeforeUnmount(async () => {
+  sleepTimer.dispose(); leavePictureInPicture();
   playerMounted = false;
   playerPreferences.clearAccount();
   preferenceSync?.dispose();
@@ -2234,7 +2269,7 @@ onMounted(async () => {
   playerMounted = true;
   await onMountedFun();
 })
-const flushHiddenProgress = () => { if (document.hidden) void SendPlayRecord(); };
+const flushHiddenProgress = () => { sleepTimer.check(); if (document.hidden) void SendPlayRecord(); };
 document.addEventListener('visibilitychange', flushHiddenProgress);
 window.addEventListener('pagehide', SendPlayRecord);
 onBeforeUnmount(() => {
@@ -2255,7 +2290,7 @@ onBeforeUnmount(() => {
     <n-grid cols="1" item-responsive responsive="screen">
       <n-grid-item span="12 m:12 l:9 xl:9 2xl:9">
         <div class="player">
-          <Artplayer class="art-player" @get-instance="getInstance" :option="setting" :style="ArtplayerStyle"/>
+          <Artplayer class="art-player" @get-instance="getInstance" :option="setting" :should-autoplay="() => !sleepTimer.state().expired" :style="ArtplayerStyle"/>
         </div>
 
         <div class="showContainer watch-info">
@@ -2391,9 +2426,17 @@ onBeforeUnmount(() => {
     </n-space>
   </n-modal>
 
+  <n-modal v-model:show="showSleepTimer" title="睡眠定时" preset="dialog" :to="recoveryTarget || undefined" :style="{width:'min(420px,94vw)'}">
+    <n-space vertical><n-text>{{ sleepStatus }}</n-text>
+      <n-select v-model:value="sleepChoice" :options="sleepOptions" :to="recoveryTarget || undefined" aria-label="睡眠定时选项" />
+      <n-text depth="3">仅对本次播放页生效，可跨集计时。到时暂停并停止自动连播；关闭定时后可恢复连播。浏览器或系统休眠可能延迟执行，页面恢复时再次核对截止时间。外部播放器不受此定时控制。</n-text>
+      <n-space><n-button @click="applySleepTimer">应用定时</n-button><n-button @click="sleepTimer.cancel();showSleepTimer=false">关闭定时</n-button></n-space>
+    </n-space>
+  </n-modal>
   <n-modal v-model:show="showSetUp" title="跳过时间段整季可用，平台链接当前集可用" preset="dialog" draggable="true"
            :style="{ width: '30em', maxHeight: '30em', overflowY: 'auto' }">
-    <n-form ref="formRef" :model="seasonConfig">
+    <n-alert v-if="!canEditSharedConfig" type="info" :show-icon="false">这是家庭共享配置，只有管理员可修改。个人弹幕选择请使用“弹幕来源”。</n-alert>
+    <n-form ref="formRef" :model="seasonConfig" :disabled="!canEditSharedConfig">
       <n-form-item path="age" label="跳过开始时间/跳过结束时间">
         <n-dynamic-input
             v-model:value="seasonConfig.list"
@@ -2436,7 +2479,7 @@ onBeforeUnmount(() => {
     </n-form>
 
     <template #action>
-      <n-button @click="putVideoConfig">确认</n-button>
+      <n-button @click="putVideoConfig" :disabled="!canEditSharedConfig">确认</n-button>
       <n-button @click="showSetUp = false">取消</n-button>
     </template>
   </n-modal>
