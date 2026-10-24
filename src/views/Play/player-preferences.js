@@ -1,9 +1,12 @@
 // Account-scoped preferences; transient playback state is never persisted here.
 import {GESTURE_HOLD_RATES} from './gesture-settings.js';
+import {QUALITY_PREFERENCES, validSubtitleLanguage} from './media-preferences.js';
+import {EXTERNAL_PLAYER_IDS} from './external-player.js';
 export const PLAYER_PREFERENCE_DEFAULTS = Object.freeze({
   audioLanguage: '', autoPlayNext: true, assSubtitles: true,
   subtitleFontSize: 20, playbackRate: 1, use302: false,
   gesturesEnabled: true, gestureHoldRate: 2,
+  subtitleLanguage: '', qualityPreference: 'highest', externalPlayer: '',
 });
 
 const validators = {
@@ -15,6 +18,9 @@ const validators = {
   use302: value => typeof value === 'boolean',
   gesturesEnabled: value => typeof value === 'boolean',
   gestureHoldRate: value => GESTURE_HOLD_RATES.includes(value),
+  subtitleLanguage: validSubtitleLanguage,
+  qualityPreference: value => QUALITY_PREFERENCES.some(item => item.value === value),
+  externalPlayer: value => value === '' || EXTERNAL_PLAYER_IDS.includes(value),
 };
 
 function validateName(name) {

@@ -35,6 +35,7 @@ const state = vm.createContext({Math, audioLabel, writePlayerPreference, primary
   savePlayerPreference: (name, value, handle) => handle.write(name, value),
   playbackSession: new PlaybackSession(), localStorage: storage,
   preferredAudioLanguage: {value: ''}, currentAudio: {value: tracks[0]},
+  currentQuality: {value: {resolution:'720',bitrate:2e6}},
   StreamList: {value: {audio_streams: tracks, video_streams: [{guid:'video',codec_name:'h264',bps:100}], files:[{guid:'file',path:'/movie.mkv'}]}},
   QualityData: {value: [{resolution:'1080'}]}, playInfo:{value:{watched_ts:12}}, currentSubtitle:{value:null},
   streamSubtitleGuid:()=>'', serverSubtitleGuid:'', GetChannels:async()=>2,
@@ -49,6 +50,7 @@ const audioFlow = source.slice(source.indexOf('async function switchAudio('), so
 vm.runInContext(urlFlow + audioFlow, state);
 await state.switchAudio({guid:'zh'});
 assert.equal(calls[0].audio_guid,'zh');assert.equal(calls[0].startTimestamp,35);
+assert.equal(calls[0].resolution,'720');assert.equal(calls[0].bitrate,2e6);
 assert.equal(state.currentAudio.value.guid,'zh');assert.equal(state.playInfo.value.watched_ts,35);
 assert.equal(calls.includes('paused'),true);
 state.COMMON.requests = async()=>{throw new Error('fixture failure');};

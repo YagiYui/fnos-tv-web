@@ -5,6 +5,7 @@ import {loadPlaybackMetadata, primaryMediaFile} from './src/views/Play/playback-
 import {PlaybackSession} from './src/views/Play/playback-session.js';
 import {chooseAudio} from './src/views/Play/audio-tracks.js';
 import {nextEpisode, previousEpisode} from './src/views/Play/player-presentation.js';
+import {choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback} from './src/views/Play/media-preferences.js';
 
 const settle = () => new Promise(setImmediate);
 const info = id => ({item: {guid: id, episode_number: id === 'one' ? 1 : 2, watched_ts: 17, audio_guid: 'zh', subtitle_guid: 'sub'}});
@@ -61,6 +62,8 @@ const source = fs.readFileSync(new URL('./src/views/Play/VideoPlayer.vue', impor
 function player() {
   const api = requestsFixture(), events = [], notices = [];
   const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController, loadPlayerPreferences() {},
+    choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback,
+    preferredSubtitleLanguage: {value:''}, preferredQuality: {value:'highest'},
     recoveryState: {value: null}, recoveryBusy: {value: false}, recoveryRun: 0,
     sourceTimer: null, sourceEpisode: null, sourcePosition: null, sourcePaused: false,
     clearTimeout() {}, clearPlaybackRecovery() { ctx.recoveryState.value = null; },

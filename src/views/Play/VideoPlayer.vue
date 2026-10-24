@@ -21,6 +21,7 @@ import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRec
 import {chooseAudio, audioLabel, createAutoplayCountdown} from './audio-tracks.js';
 import {createPlayerPreferenceStore} from './player-preferences.js';
 import {GESTURE_HOLD_RATES} from './gesture-settings.js';
+import {QUALITY_PREFERENCES, choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback, subtitleLanguageChoices, subtitleLanguageLabel} from './media-preferences.js';
 import {useBrowseSnapshots} from '../../store.js';
 const playbackSession = new PlaybackSession();
 import {installMobileFullscreen} from './mobile-fullscreen.js';
@@ -31,7 +32,7 @@ let disposeMobileGestures = () => {};
 let disposePlaybackNotices = () => {};
 import {installDesktopIdle} from './desktop-idle.js';
 let disposeDesktopIdle = () => {};
-import {externalPlayerLink, externalPlaylist} from './external-player.js';
+import {externalPlayerLink, externalPlaylist, externalPlayerChoices} from './external-player.js';
 import {createExternalSession} from './external-session.js';
 import {replaceMediaEngine, releaseMediaEngine, isCurrentMediaEngine, currentMediaEngine} from './media-lifecycle.js';
 let disposeMobileDanmaku = () => {};
@@ -60,6 +61,9 @@ const preferredAudioLanguage = ref(preferenceHandle.read('audioLanguage'));
 const autoPlayNext = ref(preferenceHandle.read('autoPlayNext'));
 const gesturesEnabled = ref(preferenceHandle.read('gesturesEnabled'));
 const gestureHoldRate = ref(preferenceHandle.read('gestureHoldRate'));
+const preferredSubtitleLanguage = ref(preferenceHandle.read('subtitleLanguage'));
+const preferredQuality = ref(preferenceHandle.read('qualityPreference'));
+const preferredExternalPlayer = ref(preferenceHandle.read('externalPlayer'));
 const stopAfterCurrent = ref(false);
 let autoplayPanel = null, autoplayText = null;
 const autoplayCountdown = createAutoplayCountdown(remaining => {
@@ -155,6 +159,11 @@ watch(externalMediaUrl, value => {
 });
 watch(showModal, visible => { if (!visible) externalMediaUrl.value = ''; });
 const externalHref = player => externalPlayerLink(player, externalMediaUrl.value, navigator.userAgent);
+const externalChoices = externalPlayerChoices(navigator.userAgent, navigator.maxTouchPoints);
+const effectiveExternalPlayer = computed(() => externalChoices.find(item => item.value === preferredExternalPlayer.value)?.value || '');
+const preferredExternalLabel = computed(() => externalChoices.find(item => item.value === effectiveExternalPlayer.value)?.label || '每次选择');
+const preferredExternalHref = computed(() => !externalMediaUrl.value || !effectiveExternalPlayer.value ? ''
+  : effectiveExternalPlayer.value === 'potplayer' ? externalPlaylistUrl.value : externalHref(effectiveExternalPlayer.value));
 async function openExternalPlayback(snapshot = null) {
   if (externalBusy.value) return;
   const selection = snapshot?.episode === episode_guid.value ? snapshot : null;
@@ -279,10 +288,13 @@ async function chooseDanmakuSource(source) {
   finally { danmakuBusy.value = false; }
 }
 async function applyDanmakuRows(rows, episodeNumber) {
+  const player = art, generation = danmakuLoadGeneration;
+  if (!player) return;
   // load() 不带参数会清空旧队列；带数组则是追加，不能用 load([]) 清空。
-  const plugin = art.plugins.artplayerPluginDanmuku;
+  const plugin = player.plugins.artplayerPluginDanmuku;
   plugin.config({danmuku: []});
   await plugin.load();
+  if (player !== art || generation !== danmakuLoadGeneration) return;
   allDanmaku.value = {[String(episodeNumber)]: [...rows].sort((a, b) => a.time - b.time)};
   danmuConfig.value.loadedUntil = Math.max(0, (art.currentTime || 0) - 1);
   lastDanmuLoadedUntil = -1;
@@ -425,6 +437,9 @@ function loadPlayerPreferences({streamChanges = true} = {}) {
   autoPlayNext.value = preferenceHandle.read('autoPlayNext');
   gesturesEnabled.value = preferenceHandle.read('gesturesEnabled');
   gestureHoldRate.value = preferenceHandle.read('gestureHoldRate');
+  preferredSubtitleLanguage.value = preferenceHandle.read('subtitleLanguage');
+  preferredQuality.value = preferenceHandle.read('qualityPreference');
+  preferredExternalPlayer.value = preferenceHandle.read('externalPlayer');
   setSubtitleFontSize(preferenceHandle.read('subtitleFontSize'), {persist: false});
   if (streamChanges) {
     useAssSubtitles.value = preferenceHandle.read('assSubtitles');
@@ -459,7 +474,7 @@ async function confirmPlayerPreferenceReset() {
     autoplayCountdown.cancel();
     showPreferenceReset.value = false;
     COMMON.ShowMsg(result.persisted
-      ? '已恢复播放偏好；音轨、ASS 样式和 302 将在重新打开影片或切集时生效'
+      ? '已恢复播放偏好；音轨、字幕、默认画质和 302 将在重新打开影片或切集时生效'
       : '本次已恢复默认，但浏览器未能完整保存；刷新后可能恢复原值');
     if (player) await UpdateControl(player);
   } catch {
@@ -802,6 +817,8 @@ function getDanmuparams() {
 }
 
 async function loadDanmuku() {
+  const player = art;
+  if (!player) return;
   const generation = ++danmakuLoadGeneration;
   const episodeGuid = episode_guid.value;
   danmuTitleData.value.html = `弹幕加载中...`
@@ -814,11 +831,11 @@ async function loadDanmuku() {
         return res.json();
       })
       .then(async json => {
-        if (generation !== danmakuLoadGeneration || episodeGuid !== episode_guid.value) return;
+        if (player !== art || generation !== danmakuLoadGeneration || episodeGuid !== episode_guid.value) return;
         const rows = episodeDanmaku(json, episode_number);
         await applyDanmakuRows(rows, episode_number);
       }).catch(err => {
-    if (generation !== danmakuLoadGeneration || episodeGuid !== episode_guid.value) return;
+    if (player !== art || generation !== danmakuLoadGeneration || episodeGuid !== episode_guid.value) return;
     danmuTitleData.value.html = '弹幕加载失败，请检查服务日志';
     COMMON.ShowMsg(errorText(err));
     art.layers.update(danmuTitleData.value)
@@ -871,7 +888,9 @@ function setQualityOptions(res) {
 
   // 设置默认画质为最高质量
   if (selector.length > 0 && selector[0].selector.length > 0) {
-    currentQuality.value = selector[0].selector[0];
+    const selected = choosePreferredQuality(res, preferredQuality.value, selector[0].selector[0]);
+    if (!selected) throw new Error('当前影片没有可用画质');
+    currentQuality.value = {...selected, html: `${selected.resolution} (${(Number(selected.bitrate) / 1000000).toFixed(1)}Mbps)`};
   }
 }
 
@@ -972,14 +991,15 @@ async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation 
   }
   let api = "/api/v1/play/play"
   const audio = audioOverride;
+  const quality = qualityOverride || currentQuality.value;
   const _channels = audio?.channels || 2;
   const local = primaryMediaFile(StreamList.value);
   let _data = {
     "media_guid": local.guid,
     "video_guid": StreamList.value.video_streams[0].guid,
     "video_encoder": StreamList.value.video_streams[0].codec_name,
-    "resolution": qualityOverride?.resolution ?? QualityData.value[0].resolution,
-    "bitrate": qualityOverride?.bitrate ?? StreamList.value.video_streams[0].bps,
+    "resolution": quality?.resolution ?? QualityData.value[0].resolution,
+    "bitrate": quality?.bitrate ?? StreamList.value.video_streams[0].bps,
     "startTimestamp": Math.max(0, Math.floor(Number(startTimestamp) || 0)),
     "audio_encoder": "aac",
     "audio_guid": audio?.guid || '',
@@ -1409,6 +1429,39 @@ async function UpdateControl(_art) {
     }
   });
   await addArtConfig(_art, 'setting', {
+    name: '首选字幕语言', html: '首选字幕语言', tooltip: `${subtitleLanguageLabel(preferredSubtitleLanguage.value)} · 下次开播`,
+    selector: subtitleLanguageChoices(StreamList.value?.subtitle_streams, preferredSubtitleLanguage.value)
+      .map(item => ({value: item.value, html: item.label, default: item.value === preferredSubtitleLanguage.value})),
+    onSelect: item => {
+      if (!controlsCurrent() || !subtitleLanguageChoices(StreamList.value?.subtitle_streams, preferredSubtitleLanguage.value).some(row => row.value === item.value)) return subtitleLanguageLabel(preferredSubtitleLanguage.value);
+      preferredSubtitleLanguage.value = item.value;
+      savePlayerPreference('subtitleLanguage', item.value, controlPreferences);
+      return `${subtitleLanguageLabel(item.value)} · 下次开播`;
+    }
+  });
+  await addArtConfig(_art, 'setting', {
+    name: '默认画质', html: '默认画质', tooltip: `${QUALITY_PREFERENCES.find(item => item.value === preferredQuality.value)?.label || '最高可用'} · 下次开播`,
+    selector: QUALITY_PREFERENCES.map(item => ({value: item.value, html: item.label, default: item.value === preferredQuality.value})),
+    onSelect: item => {
+      const selected = QUALITY_PREFERENCES.find(row => row.value === item.value);
+      if (!controlsCurrent() || !selected) return '';
+      preferredQuality.value = selected.value;
+      savePlayerPreference('qualityPreference', selected.value, controlPreferences);
+      return `${selected.label} · 下次开播`;
+    }
+  });
+  await addArtConfig(_art, 'setting', {
+    name: '首选外部播放器', html: '首选外部播放器', tooltip: preferredExternalLabel.value,
+    selector: externalChoices.map(item => ({value: item.value, html: item.label, default: item.value === effectiveExternalPlayer.value})),
+    onSelect: item => {
+      const selected = externalChoices.find(row => row.value === item.value);
+      if (!controlsCurrent() || !selected) return '';
+      preferredExternalPlayer.value = selected.value;
+      savePlayerPreference('externalPlayer', selected.value, controlPreferences);
+      return selected.label;
+    }
+  });
+  await addArtConfig(_art, 'setting', {
     name: '恢复播放偏好', html: '恢复本账号播放偏好', tooltip: '仅当前账号与浏览器',
     onClick: () => requestPlayerPreferenceReset(controlPreferences, controlVersion)
   });
@@ -1522,6 +1575,9 @@ async function play(options = null) {
     StreamList.value = metadata.streams;
     currentAudio.value = chooseAudio(metadata.streams.audio_streams, options?.audioGuid ?? playInfo.value.audio_guid, preferredAudioLanguage.value);
     setQualityOptions(metadata.qualities);
+    if (!options?.quality && qualityPreferenceFallback(currentQuality.value, preferredQuality.value)) {
+      COMMON.ShowMsg(`默认画质当前不可用，已使用 ${currentQuality.value.resolution}`);
+    }
     if (options?.quality) {
       const requested = metadata.qualities.find(item => item.resolution === options.quality.resolution && Number(item.bitrate) === Number(options.quality.bitrate));
       if (!requested) throw new Error('原画质已不可用');
@@ -1531,12 +1587,9 @@ async function play(options = null) {
 
     subtitleLoader.clear();
     currentSubtitle.value = null;
-    // 优先使用播放记录中的轨道，其次使用默认轨道。
-    if (StreamList.value && StreamList.value.subtitle_streams && StreamList.value.subtitle_streams.length > 0) {
-      const tracks = StreamList.value.subtitle_streams;
-      if (options?.subtitleGuid !== '') currentSubtitle.value = tracks.find(sub => sub.guid === (options?.subtitleGuid ?? playInfo.value.subtitle_guid))
-        || tracks.find(sub => Number(sub.is_default) === 1) || tracks[0];
-    }
+    // Recovery/explicit per-title selections override persistent language preferences.
+    currentSubtitle.value = choosePreferredSubtitle(StreamList.value?.subtitle_streams,
+      playInfo.value.subtitle_guid, preferredSubtitleLanguage.value, options?.subtitleGuid);
 
     await GetPalyUrl(undefined, operation, currentAudio.value, options?.quality || null);
     operation.assertCurrent();
@@ -1647,6 +1700,7 @@ async function switchSubtitleUrl({plain = false} = {}) {
 
 
 async function ready() {
+  if (!art || !preferenceHandle.isCurrent() || !playInfo.value) return;
   const player = art, episode = episode_guid.value;
   mountPlayerHeading(art);
   if (timerSendPlayRecord.value !== null) {
@@ -1705,10 +1759,11 @@ const artF = async (data) => {
     if (currentSubtitle.value) art.subtitle.update();
   });
   art.on('restart', () => {
-    ready();
+    if (player === art) void ready();
   });
-  art.on('ready', ready);
+  art.on('ready', () => { if (player === art) void ready(); });
   art.on('video:ratechange', () => {
+    if (player !== art) return;
     if (!art.fnosTemporarySpeed) {
       const speedSetting = art.setting.find('倍速设置');
       if (speedSetting) speedSetting.tooltip = `${art.playbackRate}×`;
@@ -1717,6 +1772,7 @@ const artF = async (data) => {
   let lastSkipIndex = -1;
   lastDanmuLoadedUntil = -1;
   art.on("video:timeupdate", () => {
+    if (player !== art) return;
     const currentTime = art.currentTime;
 
     // 跳过片头片尾
@@ -1785,12 +1841,13 @@ const artF = async (data) => {
   art.on('video:play', () => autoplayCountdown.cancel());
   art.on('video:seeking', () => autoplayCountdown.cancel());
   art.on('fullscreen', async (state) => {
-    await UpdateControl(art);
+    if (player === art) await UpdateControl(player);
   });
 
-  art.on('fullscreenWeb', async () => { await UpdateControl(art); });
+  art.on('fullscreenWeb', async () => { if (player === art) await UpdateControl(player); });
 
   art.on('control', (state) => {
+    if (player !== art) return;
     // 控制栏事件可在按下和松开之间触发；保留按钮节点，避免丢失 click。
     if (playerHeading?.parentElement) playerHeading.parentElement.style.display = state ? '' : 'none';
     danmuTitleData.value.disable = !state
@@ -1798,6 +1855,7 @@ const artF = async (data) => {
   });
 
   art.on('artplayerPluginDanmuku:config', (option) => {
+    if (player !== art) return;
     art.storage.name = 'danmu_setting';
     var o = JSON.parse(JSON.stringify(option))
     delete o.danmuku;
@@ -1886,6 +1944,8 @@ watch(() => accountState.revision, () => {
   preferenceResetGeneration++;
   showPreferenceReset.value = false;
   preferenceResetOwner = null;
+  showModal.value = false;
+  externalMediaUrl.value = '';
   disposeMobileGestures();
   loadPlayerPreferences();
   if (!playerMounted) return;
@@ -2034,8 +2094,8 @@ onBeforeUnmount(() => {
     positive-text="恢复默认" negative-text="取消" :mask-closable="!preferenceResetBusy"
     :positive-button-props="{loading: preferenceResetBusy}" :negative-button-props="{disabled: preferenceResetBusy}"
     style="width: min(440px, calc(100vw - 32px))" @positive-click="confirmPlayerPreferenceReset">
-    <p>仅重置当前账号在此浏览器保存的音轨语言、自动连播、ASS 样式、字号、倍速、302、触摸手势和长按倍率。</p>
-    <p>倍速、字号、连播和手势立即恢复；音轨、ASS 样式和 302 在重新打开影片或切集时生效。当前播放不重开，观看进度、搜索历史和其他账号设置不变。</p>
+    <p>仅重置当前账号在此浏览器保存的音轨／字幕语言、默认画质、首选外部播放器、自动连播、ASS 样式、字号、倍速、302、触摸手势和长按倍率。</p>
+    <p>倍速、字号、连播和手势立即恢复；音轨、字幕、默认画质和 302 在重新打开影片或切集时生效。当前播放不重开，观看进度、搜索历史和其他账号设置不变。</p>
   </n-modal>
   <n-modal v-model:show="showDanmakuSearch" title="搜索与选择弹幕" preset="card"
            :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">
@@ -2166,6 +2226,9 @@ onBeforeUnmount(() => {
       <div v-else-if="externalMediaUrl">
         <p>PotPlayer：下载下方播放列表后用播放器打开，或复制 HTTP 地址，在 PotPlayer 按 Ctrl+U 粘贴播放。</p>
         <n-input :value="externalMediaUrl" readonly :input-props="{'aria-label': '外部播放器 HTTP 媒体地址'}" @focus="event => event.target.select?.()" />
+        <p v-if="preferredExternalPlayer && !effectiveExternalPlayer">上次首选不适用于当前平台，请从下方选择播放器。</p>
+        <p v-if="preferredExternalHref"><a class="external-preferred-action" :href="preferredExternalHref"
+          :download="effectiveExternalPlayer === 'potplayer' ? 'fnos-tv-playlist.m3u' : undefined">{{ effectiveExternalPlayer === 'potplayer' ? '下载首选 PotPlayer 播放列表' : `使用首选 ${preferredExternalLabel} 打开` }}</a></p>
       </div>
       <ul v-if="externalMediaUrl && !externalBusy && !externalError" class="play-list">
         <li class="play-item">
@@ -2419,6 +2482,16 @@ h1 {
   padding: 0;
   display: flex;
   justify-content: space-around;
+}
+.external-preferred-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 6px;
+  background: var(--cinema-accent, #c79b65);
+  color: #141820;
+  text-decoration: none;
 }
 
 .play-list .play-item {

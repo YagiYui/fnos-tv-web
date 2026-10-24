@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {createPlayerPreferenceStore} from './src/views/Play/player-preferences.js';
 import {GESTURE_HOLD_RATES} from './src/views/Play/gesture-settings.js';
+import {QUALITY_PREFERENCES, subtitleLanguageChoices, subtitleLanguageLabel} from './src/views/Play/media-preferences.js';
+import {externalPlayerChoices} from './src/views/Play/external-player.js';
 const source = fs.readFileSync('./src/views/Play/VideoPlayer.vue', 'utf8');
 const part = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const values = new Map([
@@ -23,6 +25,9 @@ const makePlayer = () => ({playbackRate: 1, currentTime: 12, video: {paused: tru
 const disposeGestures = () => events.push('dispose-gestures');
 disposeGestures.refresh = () => events.push('refresh-gestures');
 const ctx = vm.createContext({ref, shallowRef: ref, useBrowseSnapshots: () => account, GESTURE_HOLD_RATES,
+  QUALITY_PREFERENCES, subtitleLanguageChoices, subtitleLanguageLabel,
+  externalChoices: externalPlayerChoices('Windows'), effectiveExternalPlayer: ref(''), preferredExternalLabel: ref('每次选择'),
+  showModal: ref(false), externalMediaUrl: ref(''),
   disposeMobileGestures: disposeGestures,
   createPlayerPreferenceStore: () => createPlayerPreferenceStore(() => storage),
   COMMON: {ShowMsg: value => notices.push(value), fnHost: '/fnos'}, art: makePlayer(),
@@ -73,6 +78,13 @@ assert.equal(values.get('fnosPlayer:alice:gestureHoldRate'), '2.5');
 controls.get('setting:长按加速倍率').onSelect({rate: 9});
 assert.equal(values.get('fnosPlayer:alice:gestureHoldRate'), '2.5');
 const beforeReset = new Map(values), oldSize = controls.get('setting:字幕大小');
+controls.get('setting:首选字幕语言').onSelect({value:'off'});
+assert.equal(values.get('fnosPlayer:alice:subtitleLanguage'), '"off"');
+controls.get('setting:默认画质').onSelect({value:'720'});
+assert.equal(values.get('fnosPlayer:alice:qualityPreference'), '"720"');
+controls.get('setting:首选外部播放器').onSelect({value:'potplayer'});
+assert.equal(values.get('fnosPlayer:alice:externalPlayer'), '"potplayer"');
+for(const [key, value] of values) beforeReset.set(key, value);
 controls.get('setting:恢复播放偏好').onClick();
 assert.equal(read('showPreferenceReset.value'), true);
 assert.deepEqual(values, beforeReset, 'Opening reset dialog never writes preferences');
@@ -121,4 +133,11 @@ const ready = part('async function ready()', 'const artF');
 assert.match(ready, /!art.fnosTemporarySpeed.*preferenceHandle.read\('playbackRate'\)/);
 assert.equal(/localStorage\.(playbackRate|use_302_play)/.test(source), false);
 assert.equal(source.includes("localStorage.setItem('fnosAssSubtitles'"), false);
+const callbacks=new Map();let layerUpdates=0;
+const oldPlayer={on:(name,fn)=>callbacks.set(name,fn),layers:{update(){layerUpdates++;}}};
+const lifecycle=vm.createContext({art:oldPlayer,player:oldPlayer,playerHeading:null,danmuTitleData:ref({})});
+vm.runInContext(part("  art.on('control',", "  art.on('artplayerPluginDanmuku:config'"),lifecycle);
+callbacks.get('control')(true);assert.equal(layerUpdates,1);
+lifecycle.art=null;callbacks.get('control')(false);assert.equal(layerUpdates,1);
+lifecycle.art={layers:{update(){throw new Error('Wrong account player');}}};callbacks.get('control')(false);
 console.log('PASS: actual player settings, account readiness/transitions, stale menus, scoped saving and persistence failure feedback');

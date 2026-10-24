@@ -29,4 +29,10 @@ state.danmakuEpisodes.value=[{url:'https://video.example/ep1'}];state.danmakuSel
 state.fetch=async()=>({ok:true,json:async()=>[]});calls.length=0;await state.useDanmakuEpisode();
 assert.match(state.danmakuSearchError.value,/未返回弹幕/);assert.equal(calls.length,0);
 state.fetch=async()=>({ok:false,status:401,json:async()=>({code:-2,msg:'login expired'})});await assert.rejects(state.danmakuRequest('/danmu/select'),/login expired/);
+let finishLoad;
+state.art.plugins.artplayerPluginDanmuku.load=()=>new Promise(resolve=>{finishLoad=resolve;});
+const previousRows=state.allDanmaku.value;
+const stalePlugin=state.applyDanmakuRows([{time:0,text:'stale'}],2);
+state.art=null;state.danmakuLoadGeneration++;finishLoad();await stalePlugin;
+assert.equal(state.allDanmaku.value,previousRows,'A destroyed player cannot overwrite the new account after an awaited plugin load');
 console.log('PASS: manual search, current episode choice, authenticated per-episode save, sorted rows, queue clearing, stale results, empty source rejection and API errors');

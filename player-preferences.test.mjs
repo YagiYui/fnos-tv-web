@@ -35,6 +35,8 @@ assert.equal(aliceAgain.write('playbackRate', 2).accepted, false);
 // Malformed storage and wrong types must not silently enable settings or break playback.
 for (const [name, bad] of [ ['autoPlayNext', 'false'], ['assSubtitles', 0], ['use302', {}],
   ['gesturesEnabled', 'false'], ['gestureHoldRate', '2.5'], ['gestureHoldRate', 1.5], ['gestureHoldRate', 4],
+  ['subtitleLanguage', '<img>'], ['subtitleLanguage', 'x'.repeat(64)], ['qualityPreference', {resolution:'720'}],
+  ['qualityPreference', 'invalid'], ['externalPlayer', 'potplayer:'], ['externalPlayer', 'https://example.invalid'],
   ['audioLanguage', '<bad\nvalue>'], ['audioLanguage', 'x'.repeat(65)],
   ['subtitleFontSize', 11], ['subtitleFontSize', 61], ['subtitleFontSize', 20.5],
   ['playbackRate', 0], ['playbackRate', 4], ['playbackRate', '1.5'], ['audioLanguage', ['eng']] ]) {

@@ -8,7 +8,7 @@ let handler;let created=0;let titleUpdates=0;
 const heading={parentElement:{style:{}}};
 let current=heading;
 const art={on(name,callback){assert.equal(name,'control');handler=callback;},layers:{update(options){if(options.name==='title')titleUpdates++;if(Object.hasOwn(options,'html'))current=options.html;}}};
-vm.runInNewContext(source.slice(start,end),{art,playerHeading:heading,danmuTitleData:{value:{name:'danmuTitle'}},createPlayerHeading(){created++;return {};}});
+vm.runInNewContext(source.slice(start,end),{art,player:art,playerHeading:heading,danmuTitleData:{value:{name:'danmuTitle'}},createPlayerHeading(){created++;return {};}});
 const pressed=current;
 handler(true);handler(false);handler(true);
 assert.equal(current,pressed,'The pressed return button must survive control events until pointer release');
