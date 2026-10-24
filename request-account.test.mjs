@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import axios from 'axios';
+import {createProgressReporter} from './src/views/Play/playback-session.js';
+let authorization = 'fixture-alice', finish;
+const calls=[], redirects=[];
+axios.defaults.adapter = config => {
+  calls.push({authorization:config.headers.Authorization, data:JSON.parse(config.data || '{}')});
+  if(calls.length===1) return new Promise(resolve => {finish = code => resolve({config,status:200,data:{code,data:{}}});});
+  return Promise.resolve({config,status:200,data:{code:0,data:{}}});
+};
+const source=fs.readFileSync('./src/components/common.vue','utf8').split('<script type="text/javascript">')[1].split('</script>')[0].replace(/^import .*$/gm,'').replace('export default','globalThis.COMMON =');
+const context=vm.createContext({axios,md5:()=> 'fixture-signature',VueCookies:{get:()=>authorization},Snackbar:{show(){}},router:{push:path=>redirects.push(path)},navigator:{userAgent:'Windows'},window:{location:{search:''}},localStorage:{getItem:()=>null},URLSearchParams,errorText:()=> 'fixture-error'});
+vm.runInContext(source,context);
+const common=context.COMMON;
+const first=common.requests('POST','/api/v1/play/record',true,{item_guid:'first'}).catch(error=>error);
+authorization='fixture-bob';await new Promise(setImmediate);
+assert.equal(calls[0].authorization,'fixture-alice','Actual Axios interceptor uses the caller account, not later cookies');
+finish(-2);await first;assert.deepEqual(redirects,[],'Old account rejection cannot log out the current account');
+
+calls.length=0;authorization='fixture-alice';common.userKey='alice';
+let currentData={item_guid:'same-movie',ts:10};context.playbackRecordSnapshot=()=>({...currentData});context.VueCookies={get:()=>authorization};context.createProgressReporter=createProgressReporter;context.art={notice:{}};
+const player=fs.readFileSync('./src/views/Play/VideoPlayer.vue','utf8');
+vm.runInContext(player.slice(player.indexOf('const progressReporter ='),player.indexOf('async function switchAudio('))+';globalThis.reporter=progressReporter;',context);
+const pending=context.reporter.submit();await new Promise(setImmediate);
+currentData.ts=20;context.reporter.submit();
+authorization='fixture-bob';common.userKey='bob';currentData.ts=30;context.reporter.submit();
+finish(-2);await pending;
+assert.deepEqual(calls.map(c=>[c.authorization,c.data.ts]),[['fixture-alice',10],['fixture-alice',20],['fixture-bob',30]],'Same media queues remain separate for each account, with immutable original credentials');
+assert.deepEqual(redirects,[]);assert.equal(context.art.notice.show,undefined,'Old failure notice does not leak into the new player');
+authorization='fixture-bob';await common.requests('POST','/api/v1/play/record',true,{item_guid:'new'});assert.equal(calls.at(-1).authorization,'fixture-bob');
+console.log('PASS: real Axios binding, delayed old-account auth rejection, actual player reporter credential snapshots and account-separated queues');

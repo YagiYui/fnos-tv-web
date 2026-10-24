@@ -46,8 +46,9 @@ const LoginInstance = axios.create({
 // 登录使用的拦截器
 LoginInstance.interceptors.request.use(
     config => {
-      let authorization = VueCookies.get("authorization")
+      let authorization = config.fnosAuthorization
       if (!authorization) {
+        if (VueCookies.get('authorization')) throw new Error('原请求没有登录凭据');
         const params = new URLSearchParams(window.location.search)
         const code = params.get('code')
         if (code !== null) {
@@ -72,7 +73,7 @@ LoginInstance.interceptors.response.use(
     response => {
       let code = response.data.code
       if (code === -2) {
-        router.push('/login')
+        if (response.config.headers.Authorization === VueCookies.get('authorization')) router.push('/login')
         return Promise.reject(new Error('登录已失效，请重新登录'));
       }
       if (code === 0) {
@@ -113,6 +114,9 @@ NoLoginInstance.interceptors.response.use(
 )
 
 async function requests(method, uri, isLogin = false, data = {}, options = {}) {
+  // Bind before Axios schedules its asynchronous interceptor. A queued report can
+  // explicitly retain the credentials captured with its original account snapshot.
+  if (isLogin) options = {...options, fnosAuthorization: Object.hasOwn(options, 'fnosAuthorization') ? options.fnosAuthorization : VueCookies.get('authorization')};
   let instance = LoginInstance;
   if (!isLogin) {
     instance = NoLoginInstance;
