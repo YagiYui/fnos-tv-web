@@ -1,9 +1,12 @@
+import {mediaFileStreams} from './media-files.js';
+
 export function primaryMediaFile(streams) {
+  if (streams.selected_media_guid) return streams.files.find(file => file.guid === streams.selected_media_guid);
   return streams.files.find(file => !/\d+-\d+-\S+/.test(file.path)) || streams.files[0];
 }
 
 // Reads only. Start independent requests together; quality depends on the selected media file.
-export async function loadPlaybackMetadata(requests, itemGuid, {signal, initialInfo = null} = {}) {
+export async function loadPlaybackMetadata(requests, itemGuid, {signal, initialInfo = null, mediaGuid = null} = {}) {
   const controller = new AbortController();
   const cancel = () => controller.abort();
   signal?.addEventListener('abort', cancel, {once: true});
@@ -29,9 +32,10 @@ export async function loadPlaybackMetadata(requests, itemGuid, {signal, initialI
         const streams = await read('GET', '/api/v1/stream/list/' + itemGuid + '?before_play=1');
         if (!Array.isArray(streams?.files) || !streams.files.length || !Array.isArray(streams.video_streams) || !streams.video_streams.length)
           throw new Error('当前影片没有可用视频流');
-        const qualities = await read('POST', '/api/v1/play/quality', {media_guid: primaryMediaFile(streams).guid});
+        const selected = mediaFileStreams(streams, mediaGuid || primaryMediaFile(streams).guid);
+        const qualities = await read('POST', '/api/v1/play/quality', {media_guid: primaryMediaFile(selected).guid});
         if (!Array.isArray(qualities) || !qualities.length) throw new Error('当前影片没有可用画质');
-        return {streams, qualities};
+        return {streams: selected, allStreams: streams, qualities};
       })()
     ]);
     current();

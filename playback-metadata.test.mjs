@@ -10,9 +10,9 @@ import {choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallba
 const settle = () => new Promise(setImmediate);
 const info = id => ({item: {guid: id, episode_number: id === 'one' ? 1 : 2, watched_ts: 17, audio_guid: 'zh', subtitle_guid: 'sub'}});
 const streams = {files: [{guid: 'remote', path: '1-2-remote.mkv'}, {guid: 'file', path: '/local.mkv'}],
-  video_streams: [{guid: 'video', codec_name: 'h264', bps: 500}],
-  audio_streams: [{guid: 'en', language: 'eng'}, {guid: 'zh', language: 'chi', channels: 6}],
-  subtitle_streams: [{guid: 'other', is_default: 1}, {guid: 'sub'}]};
+  video_streams: [{guid: 'video', media_guid: 'file', codec_name: 'h264', bps: 500}],
+  audio_streams: [{media_guid: 'file', guid: 'en', language: 'eng'}, {media_guid: 'file', guid: 'zh', language: 'chi', channels: 6}],
+  subtitle_streams: [{media_guid: 'file', guid: 'other', is_default: 1}, {guid: 'sub', media_guid: 'file'}]};
 const qualities = [{resolution: '1080', bitrate: 500, progressive: true}];
 function requestsFixture() {
   const calls = [];
@@ -30,7 +30,7 @@ assert.equal(api.last().path, '/api/v1/play/quality');
 assert.equal(api.last().data.media_guid, 'file');
 api.last().resolve(qualities); await settle();
 api.calls[0].resolve(info('two'));
-let result = await pending; assert.equal(result.info.item.guid, 'two'); assert.equal(result.streams, streams);
+let result = await pending; assert.equal(result.info.item.guid, 'two'); assert.equal(result.allStreams, streams); assert.equal(result.streams.video_streams[0], streams.video_streams[0]);
 assert.equal(primaryMediaFile({files: streams.files.slice(0, 1)}).guid, 'remote');
 
 api = requestsFixture(); pending = loadPlaybackMetadata(api.requests, 'two', {initialInfo: info('two')});
@@ -64,7 +64,7 @@ function player() {
   const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController, loadPlayerPreferences() {},
     choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback,
     preferredSubtitleLanguage: {value:''}, preferredQuality: {value:'highest'},
-    recoveryState: {value: null}, recoveryBusy: {value: false}, recoveryRun: 0,
+    allMediaStreams: {value: null}, subtitleOffset: {value: 0}, subtitleBottom: {value: 10}, subtitleOutline: {value: 2}, assRenderer: {setOffset(){}}, pgsRenderer: {setOffset(){}}, localSubtitleText: '', localSubtitleName: {value: ''}, recoveryState: {value: null}, recoveryBusy: {value: false}, recoveryRun: 0,
     sourceTimer: null, sourceEpisode: null, sourcePosition: null, sourcePaused: false,
     clearTimeout() {}, clearPlaybackRecovery() { ctx.recoveryState.value = null; },
     reportPlaybackFailure(error, snapshot) { ctx.recoveryState.value = {...snapshot, message: error.message}; },

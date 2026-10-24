@@ -19,7 +19,7 @@ assert.throws(()=>externalPlayerLink('potplayer','javascript:alert(1)'));
 const source=fs.readFileSync(new URL('./src/views/Play/VideoPlayer.vue',import.meta.url),'utf8');
 const fn=source.slice(source.indexOf('async function openExternalPlayback('),source.indexOf('const loading = ref(true);'));
 let payload;
-const ctx=vm.createContext({URL,AbortController,externalGeneration:0,externalController:null,externalSessionLink:'',
+const ctx=vm.createContext({URL,AbortController,StreamList:{value:{selected_media_guid:'selected-file'}},externalGeneration:0,externalController:null,externalSessionLink:'',
   createExternalSession:async()=>({play_link:'/v/media/new-session/preset.m3u8'}),mediaP:async()=>{},preferExternalFile:false,
   playInfo:{value:{guid:'movie'}},currentQuality:{value:{resolution:'1080',bitrate:8e6}},currentAudio:{value:null},currentSubtitle:{value:null},device:{mediaCanPlay:{audioChannels:2}},
   externalBusy:{value:false},externalMediaUrl:{value:''},externalError:{value:''},showModal:{value:false},episode_guid:{value:'movie'},art:{currentTime:12,pause(){}},window:{location:{origin:'http://nas:18005'}},use_302_play:{value:false},url:{value:'/fnos/v/media/session/preset.m3u8'},urlBase:{value:'/v/media/session/preset.m3u8'},playUrl:{value:media},COMMON:{fnHost:'/fnos'},VueCookies:{get:()=> 'private-token'},errorText:e=>e.message,axios:{async post(path,body,options){payload={path,body,options};return {data:{code:0,data:{url:'/danmu/external-play/ticket/preset.m3u8'}}};}}});
