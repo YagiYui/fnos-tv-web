@@ -23,6 +23,44 @@ export function lowerPlaybackQuality(qualities, current) {
     && height(item.resolution) <= size).sort((a, b) => Number(b.bitrate) - Number(a.bitrate))[0] || null;
 }
 
+// A failed future HLS request must not stop media that is still buffered and decodable.
+export function bufferedPlaybackFailure(player, onFailure, {isCurrent = () => true, resume = () => {}, win = window} = {}) {
+  let pending = null, timer = null, disposed = false;
+  const reset = () => { pending = null; win.clearTimeout(timer); timer = null; };
+  function check() {
+    win.clearTimeout(timer);
+    if (disposed || !pending) return;
+    if (!isCurrent() || player.video.ended) { reset(); return; }
+    const video = player.video, time = Number(player.currentTime) || 0;
+    let buffered = false;
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) <= time + .05 && video.buffered.end(i) > time + .25) buffered = true;
+    }
+    if (!video.error && (buffered || (video.paused && video.readyState >= 2))) {
+      timer = win.setTimeout(check, 250);
+      return;
+    }
+    const error = pending; reset(); onFailure(error);
+  }
+  function notify(error) {
+    if (disposed || !isCurrent()) return;
+    if (error?.category !== 'network' && error?.code !== 2 && error?.code !== 'ERR_NETWORK') { reset(); onFailure(error); return; }
+    pending = error; check();
+  }
+  const online = () => { if (pending && isCurrent()) resume(); };
+  const loaded = () => { if (isCurrent()) reset(); };
+  const events = ['video:waiting', 'video:stalled', 'video:timeupdate', 'video:seeked', 'video:play'];
+  for (const event of events) player.on(event, check);
+  player.on('fnos:network-ready', loaded);
+  win.addEventListener('online', online);
+  return {notify, reset, dispose() {
+    disposed = true; reset();
+    for (const event of events) player.off(event, check);
+    player.off('fnos:network-ready', loaded);
+    win.removeEventListener('online', online);
+  }};
+}
+
 // Own and remove listeners on success, failure, timeout and superseding navigation.
 // Artplayer.switchUrl leaves once-listeners behind on error and never settles for an identical URL.
 export function switchRecoverableSource(player, source, {signal, position = 0, paused = false, timeout = 45000} = {}) {

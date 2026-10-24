@@ -38,7 +38,7 @@ snapshots.save('viewer', 'late', {info: {}}, revision);
 assert.equal(snapshots.get('viewer', 'late'), null, 'Old account lifetime cannot write after A to B to A');
 snapshots.save('viewer', 'home', {playList: [{guid: 'continuing'}], scrollY: 460});
 let top = 0, finish, fail, calls = [];
-const store = Vue.reactive({revision: snapshots.revision,
+const store = Vue.reactive({account: snapshots.account, revision: snapshots.revision,
   get: (...args) => snapshots.get(...args), save: (...args) => snapshots.save(...args)});
 const COMMON = {userKey: 'viewer', requests: (...args) => {
   calls.push(args); return new Promise((resolve, reject) => { finish = resolve; fail = reject; });
@@ -71,9 +71,16 @@ pending = view.home.GetPlayList(); view.leave(); view.unmount();
 assert.equal(calls.at(-1)[4].signal.aborted, true);
 finish([{guid: 'late'}]); await pending;
 assert.equal(snapshots.get('viewer', 'home').playList.length, 0);
-view = mountHome(); snapshots.setAccount('other'); store.revision = snapshots.revision; COMMON.userKey = 'other';
+view = mountHome(); snapshots.setAccount('other'); COMMON.userKey = 'other'; store.account = 'other'; store.revision = snapshots.revision;
 assert.equal(view.home.playList.value, null, 'Active old-account content is removed synchronously');
 view.unmount();
+// Login can finish after Home mounted. It must bind the new lifetime and fetch without a refresh.
+snapshots.setAccount('');store.account='';store.revision=snapshots.revision;delete COMMON.userKey;
+view=mountHome();const beforeLogin=calls.length;await view.mounted();assert.equal(calls.length,beforeLogin);
+COMMON.userKey='first-login';snapshots.setAccount('first-login');store.account='first-login';store.revision=snapshots.revision;
+assert.equal(calls.length,beforeLogin+1);finish([{guid:'first-login-record'}]);await new Promise(setImmediate);
+assert.equal(view.home.playList.value[0].guid,'first-login-record','Account readiness updates the already mounted Home');
+view.unmount();snapshots.setAccount('other');
 for (let index = 0; index < 3; index++) snapshots.save('other', 'detail-' + index, {info: {guid: index}});
 assert.equal(snapshots.entries.size, 2); assert.equal(snapshots.get('viewer', 'detail-2'), null);
 console.log('PASS: shipped image renders direct source, warm eager/cold lazy and bounded hints; actual Home restores before network, retains on failure, clears on empty success, aborts stale replies and isolates account lifetimes');

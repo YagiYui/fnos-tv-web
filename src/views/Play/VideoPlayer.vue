@@ -17,7 +17,7 @@ import {renderDanmaku} from './danmaku-renderer.js';
 import {PlaybackSession, createProgressReporter} from './playback-session.js';
 import {loadPlaybackMetadata, primaryMediaFile} from './playback-metadata.js';
 import PlaybackRecoveryCard from './PlaybackRecoveryCard.vue';
-import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRecoverableSource} from './playback-recovery.js';
+import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRecoverableSource, bufferedPlaybackFailure} from './playback-recovery.js';
 import {chooseAudio, audioLabel, readPlayerPreference, writePlayerPreference, createAutoplayCountdown} from './audio-tracks.js';
 const playbackSession = new PlaybackSession();
 import {installMobileFullscreen} from './mobile-fullscreen.js';
@@ -29,7 +29,8 @@ let disposePlaybackNotices = () => {};
 import {installDesktopIdle} from './desktop-idle.js';
 let disposeDesktopIdle = () => {};
 import {externalPlayerLink, externalPlaylist} from './external-player.js';
-import {replaceMediaEngine, releaseMediaEngine, isCurrentMediaEngine} from './media-lifecycle.js';
+import {createExternalSession} from './external-session.js';
+import {replaceMediaEngine, releaseMediaEngine, isCurrentMediaEngine, currentMediaEngine} from './media-lifecycle.js';
 let disposeMobileDanmaku = () => {};
 const touchPlayer = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.matchMedia('(pointer: coarse)').matches);
 let disposeMobileFullscreen = () => {};
@@ -117,6 +118,15 @@ const externalMediaUrl = ref('');
 const externalBusy = ref(false);
 const externalError = ref('');
 const externalPlaylistUrl = ref('');
+const preferExternalFile = /Windows/i.test(navigator.userAgent);
+let externalSessionLink = '', externalGeneration = 0, externalController = null;
+function releaseExternalSession() {
+  externalGeneration++;
+  externalController?.abort();
+  externalController = null;
+  if (externalSessionLink) void mediaP('media.quit', externalSessionLink).catch(() => {});
+  externalSessionLink = '';
+}
 function releaseExternalPlaylist() {
   if (externalPlaylistUrl.value) URL.revokeObjectURL(externalPlaylistUrl.value);
   externalPlaylistUrl.value = '';
@@ -127,8 +137,10 @@ watch(externalMediaUrl, value => {
 });
 watch(showModal, visible => { if (!visible) externalMediaUrl.value = ''; });
 const externalHref = player => externalPlayerLink(player, externalMediaUrl.value, navigator.userAgent);
-async function openExternalPlayback() {
+async function openExternalPlayback(snapshot = null) {
   if (externalBusy.value) return;
+  const selection = snapshot?.episode === episode_guid.value ? snapshot : null;
+  const position = selection?.position ?? (playInfo.value?.guid === episode_guid.value ? art?.currentTime : null);
   art?.pause();
   if (art?.fullscreen) art.fullscreen = false;
   if (art?.fullscreenWeb) art.fullscreenWeb = false;
@@ -137,6 +149,10 @@ async function openExternalPlayback() {
   externalError.value = '';
   externalBusy.value = true;
   const episode = episode_guid.value;
+  releaseExternalSession();
+  const generation = externalGeneration;
+  const controller = externalController = new AbortController();
+  const current = () => generation === externalGeneration && episode === episode_guid.value && !controller.signal.aborted;
   try {
     if (use_302_play.value && url.value !== COMMON.fnHost + urlBase.value) {
       const direct = new URL(playUrl.value, window.location.origin);
@@ -144,15 +160,27 @@ async function openExternalPlayback() {
       externalMediaUrl.value = direct.href;
       return;
     }
-    const response = await axios.post('/danmu/external-play', {play_link: urlBase.value}, {
+    const source = await createExternalSession(COMMON.requests, episode, {
+      signal: controller.signal, position, quality: selection?.quality || currentQuality.value,
+      audioGuid: selection?.audioGuid ?? currentAudio.value?.guid,
+      subtitleGuid: selection?.subtitleGuid ?? currentSubtitle.value?.guid ?? '', maxAudioChannels: device.mediaCanPlay.audioChannels,
+      preferFile: preferExternalFile,
+    });
+    if (!current()) { if (source.play_link) void mediaP('media.quit', source.play_link).catch(() => {}); return; }
+    externalSessionLink = source.play_link || '';
+    const response = await axios.post('/danmu/external-play', source, {
+      signal: controller.signal,
       headers: {Authorization: VueCookies.get('authorization') || ''}
     });
-    if (episode !== episode_guid.value || !showModal.value) return;
+    if (!current() || !showModal.value) return;
     if (response.data?.code !== 0 || !response.data.data?.url) throw new Error(response.data?.msg || '外部播放链接获取失败');
     externalMediaUrl.value = new URL(response.data.data.url, window.location.origin).href;
   } catch (error) {
-    externalError.value = error.response?.data?.msg || errorText(error);
-  } finally { externalBusy.value = false; }
+    if (current()) {
+      externalError.value = error.response?.data?.msg || '外部播放链接准备失败，请重新获取链接';
+      if (externalSessionLink) { void mediaP('media.quit', externalSessionLink).catch(() => {}); externalSessionLink = ''; }
+    }
+  } finally { if (current()) externalBusy.value = false; }
 }
 
 const loading = ref(true);
@@ -445,6 +473,7 @@ const recoveryState = ref(null);
 const recoveryBusy = ref(false);
 const recoveryTarget = shallowRef(null);
 let sourceEpisode = null, sourcePosition = null, sourcePaused = false, sourceTimer = null, recoveryRun = 0;
+let bufferedRecovery = null;
 const lowerRecoveryQuality = computed(() => playInfo.value?.guid === recoveryState.value?.episode
   ? lowerPlaybackQuality(QualityData.value, recoveryState.value?.quality) : null);
 const lowerRecoveryLabel = computed(() => lowerRecoveryQuality.value
@@ -453,6 +482,7 @@ const canRecoverExternally = computed(() => Boolean(recoveryState.value?.episode
 
 function clearPlaybackRecovery() {
   clearTimeout(sourceTimer);
+  bufferedRecovery?.reset();
   recoveryState.value = null;
   playbackError.value = '';
 }
@@ -513,10 +543,10 @@ async function recoverPlayback(mode = 'retry') {
       if (gallery_type.value !== 'Movie') await GetEpisodeList(initialization);
     }
     if (!current() || snapshot.episode !== episode_guid.value) return;
-    await play({...snapshot, external: mode === 'external'});
+    if (mode === 'external') { await openExternalPlayback(snapshot); return; }
+    await play(snapshot);
     if (!current() || (snapshot.episode && snapshot.episode !== episode_guid.value)) return;
     loading.value = false;
-    if (mode === 'external') await openExternalPlayback();
   } catch (error) {
     if (current() && (!snapshot.episode || snapshot.episode === episode_guid.value) && !isPlaybackAbort(error)) reportPlaybackFailure(error, snapshot);
   } finally {
@@ -581,6 +611,9 @@ const setting = ref({
         if (error.fatal && isCurrentMediaEngine(player, hls) && player.fnosSourceGeneration === playbackSession.generation) {
           player.emit('fnos:media-error', {category: error.type === Hls.ErrorTypes.MEDIA_ERROR ? 'decode' : 'network'});
         }
+      });
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        if (isCurrentMediaEngine(player, hls)) player.emit('fnos:network-ready');
       });
       hls.loadSource(url)
       hls.attachMedia(video)
@@ -1555,7 +1588,12 @@ const artF = async (data) => {
   art = data;
   const player = data;
   const current = () => player === art && player.fnosSourceGeneration === playbackSession.generation;
-  const fail = error => { if (current()) reportPlaybackFailure(error); };
+  bufferedRecovery?.dispose();
+  const guard = bufferedRecovery = bufferedPlaybackFailure(player, reportPlaybackFailure, {
+    isCurrent: current, resume: () => currentMediaEngine(player)?.startLoad?.(player.currentTime),
+  });
+  player.on('destroy', () => guard.dispose());
+  const fail = error => { if (current()) guard.notify(error); };
   player.on('fnos:media-error', fail);
   player.on('video:error', () => { if (player.video.error) fail(player.video.error); });
   player.on('video:canplay', () => { if (current()) clearTimeout(sourceTimer); });
@@ -1741,6 +1779,8 @@ const onMountedFun = async () => {
 const playbackError = ref('');
 
 onBeforeRouteUpdate(async (to, from) => {
+  releaseExternalSession();
+  externalBusy.value = false;
   void SendPlayRecord();
   playbackSession.cancel();
   recoveryRun++;
@@ -1753,6 +1793,7 @@ onBeforeRouteUpdate(async (to, from) => {
 onBeforeRouteLeave(async (to, from) => {
   // Browser/system back in web fullscreen exits fullscreen before leaving playback.
   if (exitPlayerFullscreen(art)) return false;
+  releaseExternalSession();
   void SendPlayRecord();
   playbackSession.cancel();
   initializationGeneration++;
@@ -1767,12 +1808,14 @@ onBeforeRouteLeave(async (to, from) => {
 });
 
 onBeforeUnmount(async () => {
+  releaseExternalSession();
   initializationGeneration++;
   recoveryRun++;
   autoplayCountdown.cancel();
   void SendPlayRecord();
   playbackSession.cancel();
   clearTimeout(sourceTimer);
+  bufferedRecovery?.dispose();
   recoveryTarget.value = null;
   releaseExternalPlaylist();
   disposeMobileGestures();
@@ -1968,7 +2011,8 @@ onBeforeUnmount(() => {
           <i class='bx bx-x'></i>
         </n-button>
       </template>
-      <p>临时播放链接有效期 4 小时，播放期间请保留本网页。服务重启后请重新获取链接。</p>
+      <p>外部播放期间请保留本播放页。链接失效时请重新获取；PotPlayer 图标会下载播放列表，可用 PotPlayer 打开该文件。</p>
+      <p v-if="preferExternalFile">Windows 使用原文件地址，由外部播放器选择音轨、字幕和播放位置。</p>
       <p v-if="externalBusy" role="status">正在准备外部播放链接…</p>
       <div v-else-if="externalError" role="alert">
         <p>{{ externalError }}</p><n-button @click="openExternalPlayback">重新获取链接</n-button>

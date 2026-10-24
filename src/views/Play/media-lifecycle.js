@@ -1,6 +1,7 @@
 const sessions = new WeakMap();
 const bound = new WeakSet();
 export const isCurrentMediaEngine = (player, engine) => sessions.get(player) === engine;
+export const currentMediaEngine = player => sessions.get(player);
 export function releaseMediaEngine(player) {
   const engine = sessions.get(player);
   sessions.delete(player);

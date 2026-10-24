@@ -7,8 +7,9 @@ import {BrowseSnapshots} from './browse-snapshots.js'
 
 export const useBrowseSnapshots = defineStore('BrowseSnapshots', () => {
     const snapshots = new BrowseSnapshots();
+    const account = ref('');
     const revision = ref(0);
-    return {revision, setAccount: value => { snapshots.setAccount(value); revision.value = snapshots.revision; },
+    return {account, revision, setAccount: value => { snapshots.setAccount(value); account.value = snapshots.account; revision.value = snapshots.revision; },
         invalidateDetails: () => snapshots.invalidateDetails(), get: (user, key) => snapshots.get(user, key), save: (user, key, value, version) => snapshots.save(user, key, value, version)};
 })
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {EventEmitter} from 'node:events';
-import {lowerPlaybackQuality, playbackFailureMessage, switchRecoverableSource, isPlaybackAbort} from './src/views/Play/playback-recovery.js';
+import {lowerPlaybackQuality, playbackFailureMessage, switchRecoverableSource, isPlaybackAbort, bufferedPlaybackFailure} from './src/views/Play/playback-recovery.js';
 import {replaceMediaEngine, releaseMediaEngine, isCurrentMediaEngine} from './src/views/Play/media-lifecycle.js';
 
 const qualities = [{resolution:'1080',bitrate:8e6}, {resolution:'1080',bitrate:4e6}, {resolution:'720',bitrate:2e6}, {resolution:'4k',bitrate:3e6}];
@@ -36,22 +36,22 @@ const ctx=vm.createContext({recoveryState:{value:{episode:'one',position:42,paus
   lowerRecoveryQuality:{value:qualities[1]},canRecoverExternally:{value:true},recoveryRun:0,initializationGeneration:0,
   episode_guid:{value:'one'},gallery_type:{value:'TV'},loading:{value:false},art:{},isPlaybackAbort,
   getVideoConfig:async()=>{},GetEpisodeList:async()=>{},reportPlaybackFailure(error,snapshot){ctx.recoveryState.value={...snapshot,message:playbackFailureMessage(error)};}});
-let resolvePlay, calls=[],external=0;
-ctx.play=options=>{calls.push(options);return new Promise(resolve=>resolvePlay=resolve);};ctx.openExternalPlayback=async()=>{external++;};
+let resolvePlay, calls=[],external=0,externalSnapshot;
+ctx.play=options=>{calls.push(options);return new Promise(resolve=>resolvePlay=resolve);};ctx.openExternalPlayback=async snapshot=>{external++;externalSnapshot=snapshot;};
 vm.runInContext(source.slice(source.indexOf('async function recoverPlayback('),source.indexOf('const IsFullscreen =')),ctx);
 task=ctx.recoverPlayback('lower'); await ctx.recoverPlayback();assert.equal(calls.length,1);assert.equal(calls[0].quality.bitrate,4e6); assert.equal(calls[0].position,42);
 resolvePlay();await task;assert.equal(ctx.recoveryBusy.value,false);
-task=ctx.recoverPlayback('external'); resolvePlay(); await task;assert.equal(external,1);assert.equal(calls.at(-1).external,true);
-task=ctx.recoverPlayback('external');ctx.initializationGeneration++;ctx.episode_guid.value='two';resolvePlay();await task;assert.equal(external,1,'Leaving the target cannot open a stale external modal');
+task=ctx.recoverPlayback('external');await task;assert.equal(external,1);assert.equal(externalSnapshot.position,42);assert.equal(calls.length,1,'External handoff owns its session without changing web playback');
+task=ctx.recoverPlayback();ctx.initializationGeneration++;ctx.episode_guid.value='two';resolvePlay();await task;assert.equal(external,1,'Leaving the target cannot open a stale external modal');
 ctx.recoveryBusy.value=false;ctx.episode_guid.value='one';ctx.play=async()=>{throw new Error('private URL');};
 await ctx.recoverPlayback();assert.match(ctx.recoveryState.value.message,/暂时无法/);assert.equal(ctx.recoveryState.value.position,42);assert.equal(ctx.recoveryBusy.value,false);
 ctx.art=null;let resolveConfig;ctx.getVideoConfig=()=>new Promise(resolve=>resolveConfig=resolve);
-task=ctx.recoverPlayback();ctx.initializationGeneration++;resolveConfig();await task;assert.equal(calls.length,3,'Cancelled prerequisites cannot start a session');
+task=ctx.recoverPlayback();ctx.initializationGeneration++;resolveConfig();await task;assert.equal(calls.length,2,'Cancelled prerequisites cannot start a session');
 
 // Actual engine callbacks ignore nonfatal and replaced-engine events.
 class FakeHls {
   static Events={ERROR:'error'};static ErrorTypes={MEDIA_ERROR:'media'};
-  on(event,handler){this.handler=handler;}loadSource(){}attachMedia(){}destroy(){}
+  on(event,handler){if(event==='error')this.handler=handler;}loadSource(){}attachMedia(){}destroy(){}
 }
 const engineEvents=[];const enginePlayer={fnosSourceGeneration:1,on(){},emit:(name,error)=>engineEvents.push({name,error})};
 const engineContext=vm.createContext({Hls:FakeHls,replaceMediaEngine,releaseMediaEngine,isCurrentMediaEngine,
@@ -76,5 +76,17 @@ ctx.urlBase={value:'fixture'};ctx.guid={value:'one'};
 vm.runInContext(source.slice(source.indexOf('function playbackRecordSnapshot('),source.indexOf('async function SendPlayRecord(')),ctx);
 assert.equal(ctx.playbackRecordSnapshot(),null);
 ctx.sourceEpisode='one';assert.equal(ctx.playbackRecordSnapshot().bitrate,2e6);
+
+const bufferedPlayer=player();let end=30,failed=[],resume=0,current=true;
+bufferedPlayer.video={readyState:3,paused:false,ended:false,error:null,buffered:{length:1,start:()=>0,end:()=>end}};
+bufferedPlayer.currentTime=12;let timer,online;
+const guard=bufferedPlaybackFailure(bufferedPlayer,error=>failed.push(error),{isCurrent:()=>current,resume:()=>resume++,win:{
+  setTimeout:fn=>{timer=fn;return 1;},clearTimeout:()=>{timer=null;},addEventListener:(name,fn)=>{online=fn;},removeEventListener:()=>{online=null;}}});
+guard.notify({category:'network'});assert.equal(failed.length,0,'Future segment failure does not pause available buffer');
+online();assert.equal(resume,1);bufferedPlayer.emit('fnos:network-ready');assert.equal(timer,null);
+guard.notify({category:'network'});end=12;timer();assert.equal(failed.length,1,'Exhausted playable buffer exposes recovery');
+end=30;guard.notify({category:'decode'});assert.equal(failed.length,2,'Decoder failures cannot continue buffered bytes');
+guard.notify({category:'network'});current=false;timer();assert.equal(failed.length,2,'Old source cannot display a late failure');
+guard.dispose();assert.equal(online,null);
 
 console.log('PASS: bounded source recovery, zero progress and pause, strict lower quality, safe errors, duplicate clicks, navigation cancellation and fresh external handoff');
