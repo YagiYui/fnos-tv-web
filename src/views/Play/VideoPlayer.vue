@@ -241,6 +241,8 @@ watch(showModal, visible => { if (!visible) externalMediaUrl.value = ''; });
 const externalHref = player => externalPlayerLink(player, externalMediaUrl.value, navigator.userAgent);
 const externalChoices = externalPlayerChoices(navigator.userAgent, navigator.maxTouchPoints);
 const availableExternalChoices = externalChoices.filter(item => item.value);
+const potPlayerLaunchUnavailable = computed(() => Boolean(externalMediaUrl.value)
+  && availableExternalChoices.some(item => item.value === 'potplayer') && !externalHref('potplayer'));
 const effectiveExternalPlayer = computed(() => externalChoices.find(item => item.value === preferredExternalPlayer.value)?.value || '');
 const preferredExternalLabel = computed(() => externalChoices.find(item => item.value === effectiveExternalPlayer.value)?.label || '每次选择');
 const preferredExternalHref = computed(() => !externalMediaUrl.value || !effectiveExternalPlayer.value ? ''
@@ -2507,20 +2509,22 @@ onBeforeUnmount(() => {
         <p>{{ externalError }}</p><n-button @click="openExternalPlayback">重新获取链接</n-button>
       </div>
       <div v-else-if="externalMediaUrl">
-        <p v-if="availableExternalChoices.some(item => item.value === 'potplayer')">点击 PotPlayer 图标直接唤起，浏览器询问时选择打开应用。若未唤起，可下载播放列表，或复制地址在 PotPlayer 按 Ctrl+U 打开。</p>
-        <p v-if="availableExternalChoices.some(item => item.value === 'potplayer') && externalPlaylistUrl"><a :href="externalPlaylistUrl" download="fnos-tv-playlist.m3u" aria-label="下载 PotPlayer 播放列表">下载 PotPlayer 播放列表</a></p>
+        <p v-if="potPlayerLaunchUnavailable" role="status">当前浏览器会改写 PotPlayer 地址，直接唤起暂不可用。请下载播放列表后用 PotPlayer 打开，或复制下方完整地址，在 PotPlayer 按 Ctrl+U 打开。</p>
+        <p v-else-if="availableExternalChoices.some(item => item.value === 'potplayer')">点击 PotPlayer 图标直接唤起，浏览器询问时选择打开应用。若未唤起，可下载播放列表，或复制地址在 PotPlayer 按 Ctrl+U 打开。</p>
+        <p v-if="availableExternalChoices.some(item => item.value === 'potplayer') && externalPlaylistUrl"><n-button tag="a" text class="external-playlist-action" style="color:var(--cinema-text)" :href="externalPlaylistUrl" download="fnos-tv-playlist.m3u" aria-label="下载 PotPlayer 播放列表">下载 PotPlayer 播放列表</n-button></p>
         <n-input :value="externalMediaUrl" readonly :input-props="{'aria-label': '外部播放器 HTTP 媒体地址'}" @focus="event => event.target.select?.()" />
         <p v-if="preferredExternalPlayer && !effectiveExternalPlayer">上次首选不适用于当前平台，请从下方选择播放器。</p>
         <p v-if="preferredExternalHref"><a class="external-preferred-action" :href="preferredExternalHref">{{ `使用首选 ${preferredExternalLabel} 打开` }}</a></p>
       </div>
       <ul v-if="externalMediaUrl && !externalBusy && !externalError" class="play-list">
         <li v-for="item in availableExternalChoices" :key="item.value" class="play-item">
-          <a :href="externalHref(item.value)" :aria-label="`使用 ${item.label} 打开`">
+          <a v-if="externalHref(item.value)" :href="externalHref(item.value)" :aria-label="`使用 ${item.label} 打开`">
             <n-tooltip trigger="hover">
               <template #trigger><img class="play-icon" :src="`/images/${item.value}.webp`" alt=""></template>
               {{ item.label }}
             </n-tooltip>
           </a>
+          <button v-else class="external-unavailable" disabled :aria-label="`${item.label} 直接唤起不可用`" title="当前浏览器会改写播放地址，请使用播放列表或复制地址"><img class="play-icon" :src="`/images/${item.value}.webp`" alt=""></button>
         </li>
       </ul>
     </n-card>
@@ -2714,6 +2718,8 @@ h1 {
   color: #141820;
   text-decoration: none;
 }
+.external-unavailable { border: 0; padding: 0; background: transparent; opacity: .4; cursor: not-allowed; }
+.external-playlist-action { text-decoration: underline; text-underline-offset: 3px; }
 
 .play-list .play-item {
 

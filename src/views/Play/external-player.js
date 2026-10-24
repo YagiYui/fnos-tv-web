@@ -17,7 +17,12 @@ export function externalPlayerLink(player, media, userAgent = '') {
   const intent = packageName => `intent://${value.slice(url.protocol.length + 2)}#Intent;scheme=${url.protocol.slice(0, -1)};action=android.intent.action.VIEW;type=video/*;package=${packageName};end`;
   switch (player) {
     case 'iina': return 'iina://weblink/?url=' + encodeURIComponent(value);
-    case 'potplayer': return 'potplayer://' + value;
+    case 'potplayer': {
+      const link = 'potplayer://' + value;
+      // Modern URL parsers drop the inner protocol's colon as an empty port.
+      // Stock PotPlayer does not accept the opaque/percent-encoded alternatives.
+      return new URL(link).href === link ? link : '';
+    }
     case 'nplayer': return 'nplayer-' + value;
     case 'infuse': return 'infuse://x-callback-url/play?url=' + encodeURIComponent(value);
     case 'vlc': return /Android/i.test(userAgent) ? intent('org.videolan.vlc') : 'vlc://' + value;
