@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {createPlayerPreferenceStore} from './src/views/Play/player-preferences.js';
+import {createPlayerPreferenceStore,PLAYER_PREFERENCE_DEFAULTS} from './src/views/Play/player-preferences.js';
 import {GESTURE_HOLD_RATES} from './src/views/Play/gesture-settings.js';
 import {QUALITY_PREFERENCES, subtitleLanguageChoices, subtitleLanguageLabel} from './src/views/Play/media-preferences.js';
 import {externalPlayerChoices} from './src/views/Play/external-player.js';
@@ -25,7 +25,7 @@ const makePlayer = () => ({playbackRate: 1, currentTime: 12, video: {paused: tru
 const disposeGestures = () => events.push('dispose-gestures');
 disposeGestures.refresh = () => events.push('refresh-gestures');
 const ctx = vm.createContext({ref, shallowRef: ref, useBrowseSnapshots: () => account, GESTURE_HOLD_RATES,
-  QUALITY_PREFERENCES, subtitleLanguageChoices, subtitleLanguageLabel,
+  PLAYER_PREFERENCE_DEFAULTS,PreferenceSync:class{save(){return Promise.resolve(true)}reset(){return Promise.resolve(true)}dispose(){}load(){return Promise.resolve(true)}},QUALITY_PREFERENCES, subtitleLanguageChoices, subtitleLanguageLabel,
   externalChoices: externalPlayerChoices('Windows'), effectiveExternalPlayer: ref(''), preferredExternalLabel: ref('每次选择'),
   showDanmakuSources:ref(false),danmakuSourceConfig:ref(null),cancelDanmakuRequests(){},activeDanmakuSourceName:ref('来源'),showMediaFiles: ref(false), showDiagnostics: ref(false), diagnosticText: ref(''), allMediaStreams: ref(null), localSubtitleText: '', localSubtitleName: ref(''), selectedMediaLabel: ref('文件'), subtitleOffset: ref(0), subtitleBottom: ref(10), subtitleOutline: ref(2), showModal: ref(false), externalMediaUrl: ref(''),
   disposeMobileGestures: disposeGestures,

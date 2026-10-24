@@ -23,7 +23,9 @@ import PlaybackRecoveryCard from './PlaybackRecoveryCard.vue';
 import DanmakuSourcesDialog from './DanmakuSourcesDialog.vue';
 import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRecoverableSource, bufferedPlaybackFailure} from './playback-recovery.js';
 import {chooseAudio, audioLabel, createAutoplayCountdown} from './audio-tracks.js';
-import {createPlayerPreferenceStore} from './player-preferences.js';
+import {createPlayerPreferenceStore, PLAYER_PREFERENCE_DEFAULTS} from './player-preferences.js';
+import {PreferenceSync} from '../../preference-sync.js';
+import {personalRequest} from '../../personal-api.js';
 import {GESTURE_HOLD_RATES} from './gesture-settings.js';
 import {QUALITY_PREFERENCES, choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback, subtitleLanguageChoices, subtitleLanguageLabel} from './media-preferences.js';
 import {useBrowseSnapshots} from '../../store.js';
@@ -52,8 +54,20 @@ const playerPreferences = createPlayerPreferenceStore();
 let preferenceHandle = playerPreferences.bindAccount(accountState.account);
 let preferenceWarningShown = false;
 let preferenceResetGeneration = 0;
+let preferenceSync = null;
+function bindPlayerPreferenceSync() {
+  preferenceSync?.dispose();
+  const owner = preferenceHandle, token = VueCookies.get('authorization') || '';
+  preferenceSync = new PreferenceSync({defaults:PLAYER_PREFERENCE_DEFAULTS,isCurrent:()=>owner.isCurrent(),
+    seed:()=>owner.saved(),
+    request:(method,data,signal)=>personalRequest('preferences/player',{method,data,signal,token,timeout:5000}),
+    writeLocal:(name,value)=>owner.write(name,value),
+    onFailure:()=>COMMON.ShowMsg('播放偏好已保留在本设备，跨设备同步暂时不可用')});
+}
+bindPlayerPreferenceSync();
 function savePlayerPreference(name, value, handle = preferenceHandle) {
   const result = handle.write(name, value);
+  if (result.accepted && handle === preferenceHandle) void preferenceSync?.save(name,value);
   if (result.accepted && !result.persisted && !preferenceWarningShown) {
     preferenceWarningShown = true;
     COMMON.ShowMsg('播放设置仅对本次有效，浏览器未能保存；刷新后可能恢复原值');
@@ -592,6 +606,7 @@ function requestPlayerPreferenceReset(owner = preferenceHandle, version = prefer
 }
 async function confirmPlayerPreferenceReset() {
   const owner = preferenceResetOwner;
+  const sync = preferenceSync;
   if (preferenceResetBusy.value || owner !== preferenceHandle || !owner?.isCurrent()
       || preferenceResetVersion !== preferenceResetGeneration) {
     showPreferenceReset.value = false;
@@ -609,7 +624,9 @@ async function confirmPlayerPreferenceReset() {
     if (player) player.playbackRate = owner.read('playbackRate');
     autoplayCountdown.cancel();
     showPreferenceReset.value = false;
-    COMMON.ShowMsg(result.persisted
+    const synchronized = await sync.reset();
+    if (owner !== preferenceHandle || !owner.isCurrent()) return;
+    COMMON.ShowMsg(!synchronized ? '本设备已恢复默认，跨设备同步失败，请稍后重新恢复默认' : result.persisted
       ? '已恢复播放偏好；音轨、字幕、默认画质和 302 将在重新打开影片或切集时生效'
       : '本次已恢复默认，但浏览器未能完整保存；刷新后可能恢复原值');
     if (player) await UpdateControl(player);
@@ -1619,7 +1636,7 @@ async function UpdateControl(_art) {
     }
   });
   await addArtConfig(_art, 'setting', {
-    name: '恢复播放偏好', html: '恢复本账号播放偏好', tooltip: '仅当前账号与浏览器',
+    name: '恢复播放偏好', html: '恢复本账号播放偏好', tooltip: '本设备并同步当前账号',
     onClick: () => requestPlayerPreferenceReset(controlPreferences, controlVersion)
   });
   await addArtConfig(_art, 'setting', {
@@ -1706,6 +1723,7 @@ async function play(options = null) {
   if (art) { art.pause(); art.loading.show = true; }
   const playLink = urlBase.value;
   try {
+    const preferencesLoading = preferenceSync.load();
     subtitleSwitchGeneration++;
     cancelDanmakuRequests();
     danmakuLoadGeneration++;
@@ -1732,7 +1750,9 @@ async function play(options = null) {
     }
     const metadata = await loadPlaybackMetadata(COMMON.requests, episode_guid.value, {signal: operation.signal, initialInfo,
       mediaGuid: options?.mediaGuid || (options?.episode === episode_guid.value ? StreamList.value?.selected_media_guid : null)});
+    await preferencesLoading;
     operation.assertCurrent();
+    loadPlayerPreferences();
     if (playInfo.value?.guid !== metadata.info.item.guid || StreamList.value?.selected_media_guid !== metadata.streams.selected_media_guid) {
       subtitleOffset.value = 0; subtitleBottom.value = 10; subtitleOutline.value = 2;
       assRenderer.setOffset(0); pgsRenderer.setOffset(0);
@@ -2111,6 +2131,7 @@ let playerMounted = false;
 watch(() => accountState.revision, () => {
   // Never reuse a handle after an account transition, even A -> B -> A.
   preferenceHandle = playerPreferences.bindAccount(accountState.account);
+  bindPlayerPreferenceSync();
   preferenceWarningShown = false;
   preferenceResetGeneration++;
   showPreferenceReset.value = false;
@@ -2154,6 +2175,7 @@ watch(() => accountState.revision, () => {
 }, {flush: 'sync'});
 
 onBeforeRouteUpdate(async (to, from) => {
+  if (to.query.guid !== from.query.guid) bindPlayerPreferenceSync();
   releaseExternalSession();
   externalBusy.value = false;
   void SendPlayRecord();
@@ -2185,6 +2207,7 @@ onBeforeRouteLeave(async (to, from) => {
 onBeforeUnmount(async () => {
   playerMounted = false;
   playerPreferences.clearAccount();
+  preferenceSync?.dispose();
   cancelDanmakuRequests();
   releaseExternalSession();
   initializationGeneration++;
@@ -2274,7 +2297,7 @@ onBeforeUnmount(() => {
     positive-text="恢复默认" negative-text="取消" :mask-closable="!preferenceResetBusy"
     :positive-button-props="{loading: preferenceResetBusy}" :negative-button-props="{disabled: preferenceResetBusy}"
     style="width: min(440px, calc(100vw - 32px))" @positive-click="confirmPlayerPreferenceReset">
-    <p>仅重置当前账号在此浏览器保存的音轨／字幕语言、默认画质、首选外部播放器、自动连播、ASS 样式、字号、倍速、302、触摸手势和长按倍率。</p>
+    <p>重置本设备及当前账号同步保存的音轨／字幕语言、默认画质、首选外部播放器、自动连播、ASS 样式、字号、倍速、302、触摸手势和长按倍率。其他设备刷新或重新打开播放器后读取默认值。</p>
     <p>倍速、字号、连播和手势立即恢复；音轨、字幕、默认画质和 302 在重新打开影片或切集时生效。当前播放不重开，观看进度、搜索历史和其他账号设置不变。</p>
   </n-modal>
   <n-modal v-model:show="showDanmakuSearch" title="搜索与选择弹幕" preset="card"

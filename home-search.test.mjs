@@ -1,3 +1,5 @@
+import {HOME_DEFAULTS,orderedLibraries} from './src/home-preferences.js';
+import {continueCards,watchingProgress,resolveContinueNext} from './src/continue-watching.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -23,7 +25,7 @@ function mountHome() {
   let mounted, leave, unmounted;
   const scope = effectScope();
   const context = vm.createContext({ref, computed, watch, nextTick, h, AbortController, RouterLink: {}, groupSearchResults, searchResultRoute,
-    useBrowseSnapshots: () => snapshots,
+    continueCards,watchingProgress,resolveContinueNext,orderedLibraries,useHomePreferences:()=>({values:structuredClone(HOME_DEFAULTS)}),useBrowseSnapshots: () => snapshots,
     inject: (key, fallback) => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : fallback,
     useMediaSearch: () => store, useMediaDbData: () => ({list: [], info: {}, errors: {}}),
     getCurrentInstance: () => ({appContext: {config: {globalProperties: {$COMMON: COMMON}}}}),

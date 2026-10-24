@@ -9,6 +9,7 @@ import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from '
 import {CatalogCache} from './catalog-cache.js';
 import {MediaActions} from './media-actions.js';
 import {invalidateMediaCaches} from './media-state-cache.js';
+import {useHomePreferences,orderedLibraries} from './home-preferences.js';
 
 import {useMediaDbData, useMediaSearch, useLibraryViews, useBrowseSnapshots} from './store.js'
 import {useRoute} from "vue-router";
@@ -17,6 +18,8 @@ const MediaDbData = useMediaDbData()
 const mediaSearch = useMediaSearch();
 const libraryViews = useLibraryViews();
 const browseSnapshots = useBrowseSnapshots();
+const homePreferences = useHomePreferences();
+const sidebarLibraries = computed(()=>orderedLibraries(data.value||[],homePreferences.values));
 const contentLayout = ref(null);
 let contentScrollTop = 0;
 const pageScroll = {
@@ -76,7 +79,7 @@ const MediaDbSum = ref({})
 const MediaDbInfo = ref({})
 const ConfigData = ref({})
 const route = useRoute();
-const pageLabel = computed(() => ({'/': '首页', '/list': route.query.scope === 'favorites' ? '收藏' : data.value?.find(item => item.guid === route.query.gallery_uid)?.title || '媒体库', '/video': '影片详情', '/player': '正在播放'})[route.path] || '片库');
+const pageLabel = computed(() => ({'/': '首页', '/watchlist': '待看清单', '/list': route.query.scope === 'favorites' ? '收藏' : data.value?.find(item => item.guid === route.query.gallery_uid)?.title || '媒体库', '/video': '影片详情', '/player': '正在播放'})[route.path] || '片库');
 const themeOverrides = computed(() => ({common: {primaryColor: dark.value ? '#83b0f1' : '#3978d4', primaryColorHover: dark.value ? '#a4c6f5' : '#4f88da', primaryColorPressed: dark.value ? '#6598dc' : '#2866bb', borderRadius: '8px'}}));
 
 if (COMMON.isMo) {
@@ -355,6 +358,7 @@ watch(
                         </router-link>
                       </li>
                       <li><router-link to="/list?scope=favorites" active-class="" exact-active-class="" @click="isMobile && (collapsed = true)" :class="{'library-active': route.path === '/list' && route.query.scope === 'favorites'}"><span class="icon"><i class="bx bx-star"></i></span><span class="title">收藏</span></router-link></li>
+                      <li><router-link to="/watchlist" @click="isMobile && (collapsed = true)"><span class="icon"><i class="bx bx-bookmark"></i></span><span class="title">待看</span></router-link></li>
                     </ul>
                   </div>
                 </div>
@@ -362,7 +366,7 @@ watch(
                   <div class="sider-item-title">媒体库</div>
                   <div class="navigation more">
                     <ul class="nav-links">
-                      <li v-for="(item, index) in data" :key="index">
+                      <li v-for="(item, index) in sidebarLibraries" :key="item.guid">
                         <div v-if="item.category !== 'Others'">
                           <router-link @click="isMobile && (collapsed = true)" active-class="" exact-active-class="" :class="{'library-active': isLibraryActive(route, item.guid)}" :to="{
                                                     path: '/list', query: {

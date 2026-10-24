@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 const routes = [
+    {path:'/watchlist',name:'Watchlist',component:()=>import('../views/Watchlist.vue')},
 
     {
         path: '/',

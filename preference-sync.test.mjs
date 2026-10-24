@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import {PreferenceSync} from './src/preference-sync.js';
+const defaults={rate:1,enabled:true};
+let server={schema:1,revision:0,values:{}},calls=[],warnings=0,holdRead=null,holdWrite=null,failWrite=false;
+const request=async(method,data,signal)=>{
+ calls.push({method,data,signal});
+ if(method==='GET'){if(holdRead)return new Promise(resolve=>{holdRead=resolve});return structuredClone(server);}
+ if(holdWrite)return new Promise(resolve=>{holdWrite=()=>{server={schema:1,revision:server.revision+1,values:data.reset?{...defaults}:{...server.values,...data.values}};resolve(structuredClone(server));}});
+ if(data.revision!==server.revision)throw Object.assign(new Error('conflict'),{status:409});
+ if(failWrite)throw new Error('offline');
+ server={schema:1,revision:server.revision+1,values:data.reset?{...defaults}:{...server.values,...data.values}};return structuredClone(server);
+};
+const make=(local={},seed=()=>({}))=>new PreferenceSync({request,defaults,seed,writeLocal:(key,value)=>{local[key]=value;},onFailure:()=>warnings++});
+let local={rate:1.5},sync=make(local,()=>({...local}));
+await sync.load();await sync.flush();assert.equal(server.values.rate,1.5,'Only existing account-owned settings seed an empty server record');
+calls=[];const first=sync.save('rate',2),second=sync.save('enabled',false);await Promise.all([first,second]);
+assert.equal(calls.filter(row=>row.method==='PUT').length,1,'Rapid settings changes share one merge request');
+assert.deepEqual(server.values,{rate:2,enabled:false});
+const otherLocal={},other=make(otherLocal);await other.load();assert.deepEqual(otherLocal,server.values);
+server={...server,revision:server.revision+1,values:{...server.values,enabled:true}};
+await sync.save('rate',2.5);assert.equal(server.values.rate,2.5);assert.equal(server.values.enabled,true,'Conflict retry merges only the selected field');
+holdWrite=true;const before=sync.save('rate',3);await new Promise(setImmediate);
+const reset=sync.reset();holdWrite();holdWrite=null;await Promise.all([before,reset]);
+assert.deepEqual(server.values,defaults,'Reset follows the acknowledged earlier write');
+failWrite=true;assert.equal(await sync.save('rate',2),false);assert.equal(await sync.save('rate',2.5),false);assert.equal(warnings,1,'Repeated network failures report one account-scoped warning');
+failWrite=false;await sync.reset();assert.deepEqual(server.values,defaults);
+holdRead=true;const staleLocal={},stale=make(staleLocal),pending=stale.load();stale.dispose();holdRead(structuredClone(server));holdRead=null;await pending;
+assert.deepEqual(staleLocal,{});assert.equal(calls.at(-1).signal.aborted,true);
+assert.equal(await stale.save('rate',3),false);
+sync.dispose();other.dispose();
+console.log('PASS: account-owned migration, cross-device read, coalescing, version conflict merge, ordered reset, offline local fallback and stale account cancellation');

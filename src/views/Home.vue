@@ -2,7 +2,11 @@
 import HomeCarousel from "../components/HomeCarousel.vue";
 import VisibleSection from '../components/VisibleSection.vue';
 import MediaImage from '../components/MediaImage.vue';
+import WatchlistCollection from '../components/WatchlistCollection.vue';
+import HomeSettings from '../components/HomeSettings.vue';
+import {useHomePreferences,orderedLibraries} from '../home-preferences.js';
 import {continuePlaybackRoute} from './Play/player-presentation.js';
+import {continueCards,watchingProgress,resolveContinueNext} from '../continue-watching.js';
 import {useMediaDbData, useMediaSearch, useBrowseSnapshots} from '../store'
 import {getCurrentInstance, onMounted, ref, onUnmounted, computed, h, watch, inject, nextTick} from "vue";
 import {onBeforeRouteLeave, RouterLink} from 'vue-router';
@@ -10,6 +14,9 @@ import {groupSearchResults, searchResultRoute} from '../media-search.js';
 import {useMessage, NIcon, NProgress} from 'naive-ui'
 
 const MediaDbData = useMediaDbData()
+const homePreferences = useHomePreferences();
+const showHomeSettings = ref(false);
+const homeSections = computed(()=>homePreferences.values.sections.filter(id=>!homePreferences.values.hiddenSections.includes(id)));
 const message = useMessage()
 const isMobile = ref(window.innerWidth <= 768);
 const per_view = ref(window.innerWidth <= 768 ? 2 : 4);
@@ -25,7 +32,7 @@ let playController = null;
 let playGeneration = 0;
 function cancelPlayList() { playGeneration++; playController?.abort(); playController = null; }
 function saveHome() {
-  browseSnapshots.save(viewAccount, 'home', {playList: playList.value, scrollY: pageScroll.getTop()}, viewRevision);
+  browseSnapshots.save(viewAccount, 'home', {playList: playList.value, nextEntries:nextEntries.value, scrollY: pageScroll.getTop()}, viewRevision);
 }
 const mediaSearch = useMediaSearch();
 const search = mediaSearch.state;
@@ -43,7 +50,7 @@ watch(() => mediaChanges.value, () => {
 });
 const searchGroups = computed(() => groupSearchResults(search.items, search.limit));
 const hasMoreSearchResults = computed(() => searchGroups.value.some(group => group.total > group.items.length));
-const visibleLibraries = computed(() => (MediaDbData.list || []).filter(item => item.category !== 'Others'));
+const visibleLibraries = computed(() => orderedLibraries((MediaDbData.list || []).filter(item => item.category !== 'Others'),homePreferences.values));
 const libraryRoute = item => ({path: '/list', query: {gallery_uid: item.guid, gallery_type: item.category}});
 
 function filteredItems(key) {
@@ -70,6 +77,9 @@ onBeforeRouteLeave(() => {
   cancelHomeLibraries();
 });
 const playList = ref(savedHome?.playList || null)
+const nextEntries = ref(savedHome?.nextEntries || {});
+const resumeCards = computed(()=>continueCards(playList.value,nextEntries.value));
+const remainingLabel=item=>{const seconds=watchingProgress(item).remaining;return seconds===null?'':seconds===0?'已到片尾':`剩余约 ${Math.ceil(seconds/60)} 分钟`;};
 const play_item_guid = ref(null);
 const showDropdown = ref(false)
 const dropdownX = ref(0)
@@ -112,13 +122,13 @@ const handleDropdownSelect = async (key) => {
   switch (key) {
     case 'continue':
       // 跳转到播放页面
-      proxy.$router.push(continuePlaybackRoute(item))
+      proxy.$router.push(item.continueRoute || continuePlaybackRoute(item))
       break
     case 'remove':
       try {
         // 调用移除API
         await COMMON.requests("DELETE", `/api/v1/play/record`, true, {
-          "item_guid": item.guid
+          "item_guid": item.continueRecordGuid || item.guid
         })
         message.success('已从继续观看中移除')
         // 重新获取播放列表
@@ -140,8 +150,10 @@ const handleClickOutside = () => {
 const updateCarouselLayout = () => {
   isMobile.value = window.innerWidth <= 768;
   per_view.value = window.innerWidth <= 768 ? 2 : 4;
-  per_card.value = window.innerWidth <= 768 ? 3 : 7;
+  per_card.value = window.innerWidth <= 768 ? homePreferences.values.density === 'compact' ? 4 : 3 : homePreferences.values.density === 'compact' ? 9 : 7;
 };
+watch(()=>homePreferences.values.density,updateCarouselLayout);
+updateCarouselLayout();
 window.addEventListener('resize', updateCarouselLayout);
 
 async function GetPlayList() {
@@ -156,16 +168,20 @@ async function GetPlayList() {
     if (!Array.isArray(result)) throw new Error('继续观看数据无效');
     playList.value = result;
     saveHome();
+    const next = await resolveContinueNext(COMMON.requests,result,{signal:controller.signal});
+    if(current()){nextEntries.value=next;saveHome();}
   } catch (error) {
     if (current()) throw error;
   } finally { if (current()) playController = null; }
 }
 watch(() => browseSnapshots.revision, () => {
+  showHomeSettings.value = false;
   cancelPlayList();
   viewAccount = browseSnapshots.account ?? COMMON.userKey ?? '';
   viewRevision = browseSnapshots.revision;
   savedHome = browseSnapshots.get(viewAccount, 'home');
   playList.value = savedHome?.playList || null;
+  nextEntries.value = savedHome?.nextEntries || {};
   if (viewAccount && viewAccount === COMMON.userKey) void GetPlayList().catch(error => message.error(error?.message || '继续观看加载失败'));
 }, {flush: 'sync'});
 
@@ -191,13 +207,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="content cinema-home">
+  <div class="content cinema-home" :class="{'home-compact':homePreferences.values.density==='compact'}">
     <div class="library-toolbar">
       <div><h1>首页</h1><p class="page-description">继续观看与媒体库</p></div>
       <n-input v-model:value="keyword" class="catalog-search" clearable placeholder="搜索全库，回车提交" aria-label="搜索全库" @keydown.enter="submitSearch" @clear="clearSearch">
         <template #prefix><i class="bx bx-search"></i></template>
         <template #suffix><n-button text :disabled="!keyword.trim()" aria-label="提交全库搜索" @click="submitSearch"><i class="bx bx-right-arrow-alt"></i></n-button></template>
       </n-input>
+      <n-button @click="showHomeSettings=true">首页设置</n-button>
     </div>
     <section v-if="search.query" class="search-results" aria-label="搜索结果" :aria-busy="search.status === 'loading'">
       <p v-if="search.stale && search.items.length" class="page-description" role="status">正在重新验证状态，暂显示上次搜索结果。</p>
@@ -222,7 +239,7 @@ onUnmounted(() => {
       <div v-if="hasMoreSearchResults" class="catalog-pagination"><n-button secondary @click="mediaSearch.showMore()">显示更多结果</n-button></div>
     </section>
     <template v-else>
-    <div v-if="search.history.length" class="search-history" aria-label="搜索历史">
+    <div v-if="homePreferences.values.showHistory && search.history.length" class="search-history" aria-label="搜索历史">
       <span>搜索历史</span><n-button v-for="value in search.history" :key="value" text @click="searchHistory(value)">{{ value }}</n-button><n-button text @click="mediaSearch.clearHistory()">清空历史</n-button>
     </div>
     <nav class="library-shortcuts" aria-label="媒体库">
@@ -230,22 +247,27 @@ onUnmounted(() => {
         <i class="bx" :class="item.category === 'Movie' ? 'bx-film' : 'bx-tv'"></i><span>{{ item.title }}</span><i class="bx bx-chevron-right"></i>
       </router-link>
     </nav>
-    <section class="card-shows continue-section" v-if="playList?.length">
-      <div class="section-heading"><h2>继续观看</h2></div>
-      <HomeCarousel :items="playList" :per-view="per_view" :mobile="isMobile">
+    <template v-for="section in homeSections" :key="section">
+    <section class="card-shows continue-section" v-if="section==='continue' && resumeCards.length">
+      <div class="section-heading"><h2>继续观看</h2><n-button text @click="GetPlayList().catch(error=>message.error(error.message))">刷新</n-button></div>
+      <HomeCarousel :items="resumeCards" :per-view="per_view" :mobile="isMobile">
         <template #default="{item}">
         <div class="continue-card" @contextmenu="handleContextMenu($event, item)">
-          <router-link :to="continuePlaybackRoute(item)">
+          <router-link :to="item.continueRoute">
             <div class="continue-art"><MediaImage :src="item.poster ? COMMON.imgUrl + item.poster : '/images/not_gellery.png'" :alt="item.tv_title || item.title" loading="lazy" /><span class="poster-play"><i class="bx bx-play"></i></span>
               <div class="continue-progress" v-if="item.duration > 0"><span :style="{width: Math.min(100, Math.max(0, Number(item.ts || 0) / item.duration * 100)) + '%'}"></span></div>
             </div>
             <div class="view-item-title">{{ item.type === 'Episode' ? item.tv_title : item.title }}</div>
             <div class="poster-caption">{{ item.type === 'Episode' ? `第 ${item.season_number} 季 · 第 ${item.episode_number} 集` : '电影' }}</div>
+            <div class="poster-caption">{{item.continueKind==='next'?'接着看下一集':item.continueKind==='lookup-error'?'下一集未能确认，查看剧集':remainingLabel(item)}}</div>
           </router-link>
         </div>
       </template>
       </HomeCarousel>
     </section>
+    <WatchlistCollection v-if="section==='watchlist'" preview :mobile="isMobile" :per-view="per_card" />
+    <template v-if="section==='libraries'">
+    <p class="page-description">最近入库 · 按媒体库入库时间倒序展示首批影片</p>
     <VisibleSection v-for="library in visibleLibraries" :key="library.guid" class="card-shows" :aria-busy="Boolean(MediaDbData.loading?.[library.guid])" @visible="showLibrary(library.guid)">
         <div class="section-heading"><h2>{{ library.title }}</h2><router-link :to="libraryRoute(library)" class="section-more">查看全部 <i class="bx bx-chevron-right"></i></router-link></div>
         <n-alert v-if="MediaDbData.errors?.[library.guid]" type="error">{{ MediaDbData.errors[library.guid] }} <n-button text :loading="Boolean(MediaDbData.loading?.[library.guid])" @click="loadHomeLibrary(library.guid, true)">重试</n-button></n-alert>
@@ -263,6 +285,10 @@ onUnmounted(() => {
       <div v-else-if="!MediaDbData.errors?.[library.guid]" class="home-library-placeholder" :style="{'--home-columns': per_card}" aria-hidden="true"><div v-for="slot in per_card" :key="slot"><n-skeleton class="poster-art" /><n-skeleton text /></div></div>
     </VisibleSection>
     </template>
+    </template>
+    <n-empty v-if="!homeSections.length" description="首页栏目已全部隐藏，可打开首页设置恢复" />
+    </template>
+    <HomeSettings v-if="showHomeSettings" :key="browseSnapshots.revision" :libraries="(MediaDbData.list||[]).filter(item=>item.category!=='Others')" @close="showHomeSettings=false" />
     <n-dropdown
         :show="showDropdown"
         :options="dropdownOptions"
@@ -278,4 +304,6 @@ onUnmounted(() => {
 <style scoped>
 .home-library-placeholder{display:grid;grid-template-columns:repeat(var(--home-columns),minmax(0,1fr));gap:18px}
 .home-library-placeholder :deep(.poster-art){height:auto;aspect-ratio:2/3}.home-library-placeholder :deep(.n-skeleton--text){margin-top:10px}
+@media(min-width:1101px){.home-compact :deep(.view-card-list){grid-template-columns:repeat(9,minmax(0,1fr))!important}}
+@media(max-width:768px){.home-compact :deep(.view-card-list){grid-template-columns:repeat(4,minmax(0,1fr))!important}}
 </style>
