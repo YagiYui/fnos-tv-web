@@ -1309,6 +1309,8 @@ async function GetEmoji(sourceId = '') {
 
 async function putVideoConfig() {
   if (!canEditSharedConfig.value) return;
+  const owner = preferenceHandle, episode = episode_guid.value, season = guid.value;
+  const current = () => owner === preferenceHandle && owner.isCurrent() && episode === episode_guid.value && season === guid.value;
   let sendData = {
     list: [],
     url: []
@@ -1339,13 +1341,14 @@ async function putVideoConfig() {
         Authorization: VueCookies.get("authorization")
       },
     })
+    if (!current()) return;
     if (res.data?.code !== 0) throw new Error(res.data?.msg || '保存配置失败');
     skipList.value = sendData.list
     seasonConfig.value = sendData
     art.plugins.artplayerPluginDanmuku.load();
     void loadDanmuku()
   } catch (error) {
-    COMMON.ShowMsg(errorText(error));
+    if (current()) COMMON.ShowMsg(errorText(error));
     return;
   }
   showSetUp.value = false;
@@ -1354,12 +1357,12 @@ async function putVideoConfig() {
 
 async function getVideoConfig() {
   const episode = episode_guid.value, season = guid.value;
-  const account = VueCookies.get('authorization');
+  const owner = preferenceHandle;
   canEditSharedConfig.value = false;
   try {
     let api = "/api/videoConfig?episode_guid=" + episode_guid.value + "&guid=" + guid.value
     let res = await axios.get(api, {headers: {Authorization: VueCookies.get("authorization")}})
-    if (episode !== episode_guid.value || season !== guid.value || account !== VueCookies.get('authorization')) return;
+    if (episode !== episode_guid.value || season !== guid.value || owner !== preferenceHandle || !owner.isCurrent()) return;
     if (!Array.isArray(res.data?.list) || !Array.isArray(res.data?.url)) throw new Error('播放配置返回格式异常');
     seasonConfig.value = res.data;
     canEditSharedConfig.value = res.data.permissions?.edit_shared === true;
