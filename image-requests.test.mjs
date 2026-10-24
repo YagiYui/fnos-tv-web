@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {createImageRequestQueue,posterUrl} from './src/image-requests.js';
+const queue=createImageRequestQueue(2),started=[],release=[];
+const add=i=>queue.add(done=>{started.push(i);release[i]=done;});
+add(0);add(1);const cancel=add(2);add(3);
+assert.deepEqual(started,[0,1]);cancel();release[0]();assert.deepEqual(started,[0,1,3]);
+release[0]();assert.deepEqual(started,[0,1,3],'Repeated cleanup never frees a second slot');release[1]();release[3]();add(4);assert.deepEqual(started,[0,1,3,4]);release[4]();
+assert.equal(posterUrl('/fnos/v/api/v1/sys/img','/ab/03/poster.webp'),'/fnos/v/api/v1/sys/img/ab/03/poster.webp?w=300');
+assert.equal(posterUrl('/images','old.webp'),'/images/92/17/old.webp?w=300');
+assert.equal(posterUrl('/images','https://cdn.invalid/poster.webp?signature=fixture'),'https://cdn.invalid/poster.webp?signature=fixture');
+console.log('PASS: bounded image concurrency, pending cancellation, idempotent release, canonical poster paths and legacy/custom URL preservation');

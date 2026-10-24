@@ -4,7 +4,7 @@ export function isLibraryActive(route, guid) {
 export function libraryViewKey(route) { return route.query.scope === 'favorites' ? '@favorites' : route.query.gallery_uid; }
 
 export function pageBackAction(route, previous) {
-  if (route.path === '/list') return {type: 'replace', to: '/'};
+  if (['/list', '/watchlist'].includes(route.path)) return {type: 'replace', to: '/'};
   if (typeof previous === 'string' && previous.startsWith('/') && !previous.startsWith('//')) {
     const target = new URL(previous, 'https://fnos.invalid');
     const allowed = ['/', '/list', '/video'].includes(target.pathname);

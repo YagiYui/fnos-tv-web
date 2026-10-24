@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import {externalPlayerLink,externalPlaylist} from './src/views/Play/external-player.js';
 const media='http://nas:18005/danmu/external-play/fixture/preset.m3u8?x=1&y=2';
 assert.equal(externalPlayerLink('nplayer',media),'nplayer-'+media);
-assert.throws(()=>externalPlayerLink('potplayer',media));
+assert.equal(externalPlayerLink('potplayer',media),'potplayer://'+media);
 const playlist=externalPlaylist(media,'Movie\n#EXT-X-KEY:bad');
 assert.equal(playlist.split('\n').filter(line=>line.startsWith('http')).length,1);
 assert.ok(playlist.endsWith(media+'\n'));

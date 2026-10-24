@@ -27,7 +27,8 @@ import {createPlayerPreferenceStore, PLAYER_PREFERENCE_DEFAULTS} from './player-
 import {PreferenceSync} from '../../preference-sync.js';
 import {personalRequest} from '../../personal-api.js';
 import {GESTURE_HOLD_RATES} from './gesture-settings.js';
-import {createSleepTimer, pictureInPictureAvailable, togglePictureInPicture} from './sleep-timer.js';
+import {createSleepTimer} from './sleep-timer.js';
+import {captionPictureInPictureAvailable, installCaptionPictureInPicture} from './caption-picture-in-picture.js';
 import {groupPlayerSettings, installPictureInPictureOverlays} from './player-settings.js';
 import {QUALITY_PREFERENCES, choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback, subtitleLanguageChoices, subtitleLanguageLabel} from './media-preferences.js';
 import {useBrowseSnapshots} from '../../store.js';
@@ -95,6 +96,7 @@ function applySleepTimer() {
   sleepTimer.set(sleepChoice.value); autoplayCountdown.cancel(); showSleepTimer.value = false;
 }
 function leavePictureInPicture() {
+  art?.fnosCaptionPiP?.close();
   if (document.pictureInPictureElement === art?.video) void document.exitPictureInPicture().catch(()=>{});
 }
 let autoplayPanel = null, autoplayText = null;
@@ -242,7 +244,7 @@ const availableExternalChoices = externalChoices.filter(item => item.value);
 const effectiveExternalPlayer = computed(() => externalChoices.find(item => item.value === preferredExternalPlayer.value)?.value || '');
 const preferredExternalLabel = computed(() => externalChoices.find(item => item.value === effectiveExternalPlayer.value)?.label || '每次选择');
 const preferredExternalHref = computed(() => !externalMediaUrl.value || !effectiveExternalPlayer.value ? ''
-  : effectiveExternalPlayer.value === 'potplayer' ? externalPlaylistUrl.value : externalHref(effectiveExternalPlayer.value));
+  : externalHref(effectiveExternalPlayer.value));
 async function openExternalPlayback(snapshot = null) {
   if (externalBusy.value) return;
   const selection = snapshot?.episode === episode_guid.value ? snapshot : null;
@@ -1680,10 +1682,8 @@ async function UpdateControl(_art) {
   });
   await addArtConfig(_art, 'setting', {name:'睡眠定时',html:'睡眠定时',tooltip:sleepStatus.value,
     onClick:()=>{ if(controlsCurrent()) {showSleepTimer.value=true;_art.setting.show=false;} }});
-  if (pictureInPictureAvailable(_art.video, document)) {
-    await addArtConfig(_art, 'setting', {name:'画中画',html:'进入 / 退出画中画',tooltip:'仅视频画面，不含网页字幕与弹幕',
-      onClick:()=>{ if(controlsCurrent()) void togglePictureInPicture(_art.video,document).catch(()=>COMMON.ShowMsg('浏览器未能进入画中画，请检查权限或退出全屏后重试')); }});
-  }
+  await addArtConfig(_art, 'setting', {name:'画中画',html:'画中画（含字幕）',tooltip:captionPictureInPictureAvailable() ? '保留当前字幕与弹幕' : '需桌面版 Edge／Chrome 支持',
+    onClick:()=>{ if(controlsCurrent()) void _art.fnosCaptionPiP?.toggle().catch(error=>COMMON.ShowMsg(errorText(error) || '请退出全屏后重试画中画')); }});
   await addArtConfig(_art, 'setting', {
     name: 'ASS特效字幕', html: 'ASS 特效字幕', tooltip: useAssSubtitles.value ? '原始样式' : '普通字幕',
     switch: useAssSubtitles.value,
@@ -2120,6 +2120,7 @@ const dynamicInputCreateByUrl = () => {
 
 async function getInstance(_art) {
   installPictureInPictureOverlays(_art);
+  installCaptionPictureInPicture(_art);
   const gestureOwner = preferenceHandle;
   autoplayCountdown.cancel();
   autoplayPanel = null;
@@ -2506,17 +2507,15 @@ onBeforeUnmount(() => {
         <p>{{ externalError }}</p><n-button @click="openExternalPlayback">重新获取链接</n-button>
       </div>
       <div v-else-if="externalMediaUrl">
-        <p v-if="availableExternalChoices.some(item => item.value === 'potplayer')">PotPlayer：下载下方播放列表后用播放器打开，或复制 HTTP 地址，在 PotPlayer 按 Ctrl+U 粘贴播放。</p>
+        <p v-if="availableExternalChoices.some(item => item.value === 'potplayer')">点击 PotPlayer 图标直接唤起，浏览器询问时选择打开应用。若未唤起，可下载播放列表，或复制地址在 PotPlayer 按 Ctrl+U 打开。</p>
+        <p v-if="availableExternalChoices.some(item => item.value === 'potplayer') && externalPlaylistUrl"><a :href="externalPlaylistUrl" download="fnos-tv-playlist.m3u" aria-label="下载 PotPlayer 播放列表">下载 PotPlayer 播放列表</a></p>
         <n-input :value="externalMediaUrl" readonly :input-props="{'aria-label': '外部播放器 HTTP 媒体地址'}" @focus="event => event.target.select?.()" />
         <p v-if="preferredExternalPlayer && !effectiveExternalPlayer">上次首选不适用于当前平台，请从下方选择播放器。</p>
-        <p v-if="preferredExternalHref"><a class="external-preferred-action" :href="preferredExternalHref"
-          :download="effectiveExternalPlayer === 'potplayer' ? 'fnos-tv-playlist.m3u' : undefined">{{ effectiveExternalPlayer === 'potplayer' ? '下载首选 PotPlayer 播放列表' : `使用首选 ${preferredExternalLabel} 打开` }}</a></p>
+        <p v-if="preferredExternalHref"><a class="external-preferred-action" :href="preferredExternalHref">{{ `使用首选 ${preferredExternalLabel} 打开` }}</a></p>
       </div>
       <ul v-if="externalMediaUrl && !externalBusy && !externalError" class="play-list">
         <li v-for="item in availableExternalChoices" :key="item.value" class="play-item">
-          <a :href="item.value === 'potplayer' ? externalPlaylistUrl : externalHref(item.value)"
-             :download="item.value === 'potplayer' ? 'fnos-tv-playlist.m3u' : undefined"
-             :aria-label="item.value === 'potplayer' ? '下载 PotPlayer 播放列表' : `使用 ${item.label} 打开`">
+          <a :href="externalHref(item.value)" :aria-label="`使用 ${item.label} 打开`">
             <n-tooltip trigger="hover">
               <template #trigger><img class="play-icon" :src="`/images/${item.value}.webp`" alt=""></template>
               {{ item.label }}

@@ -17,7 +17,7 @@ compiled = compiled.replace(/import \{([^}]+)\} from "vue"/g, (_, names) => {
   for (const item of names.split(',')) { const [name, alias = name] = item.trim().split(/\s+as\s+/); bindings[alias] = Vue[name]; }
   return '';
 }).replace(/^import .*$/gm, '').replace('export default', 'globalThis.component =');
-const ctx = vm.createContext({...Vue, ...bindings, onBeforeUnmount() {}, imageLoading, rememberImage, imageRetryUrl}); vm.runInContext(compiled, ctx);
+const ctx = vm.createContext({...Vue, ...bindings, onBeforeUnmount() {}, clearTimeout, imageLoading, rememberImage, imageRetryUrl}); vm.runInContext(compiled, ctx);
 function renderImage(src, loading = 'lazy') { return ctx.component.setup({src, alt: 'poster', loading})({}, []); }
 let vnode = renderImage('/poster.webp');
 assert.equal(vnode.props.src, '/poster.webp'); assert.equal(vnode.props.loading, 'lazy');

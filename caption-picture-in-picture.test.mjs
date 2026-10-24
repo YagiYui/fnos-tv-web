@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {captionPictureInPictureAvailable,installCaptionPictureInPicture} from './src/views/Play/caption-picture-in-picture.js';
+assert.equal(captionPictureInPictureAvailable({isSecureContext:true}),false);
+assert.equal(captionPictureInPictureAvailable({isSecureContext:false,documentPictureInPicture:{requestWindow(){}}}),false);
+let resolveWindow,closed=0,destroy;
+const win={isSecureContext:true,documentPictureInPicture:{requestWindow:()=>new Promise(resolve=>{resolveWindow=resolve})},addEventListener(){},removeEventListener(){}};
+const player={video:{disablePictureInPicture:false},template:{$player:{}},on(name,callback){if(name==='destroy')destroy=callback;}};
+const controller=installCaptionPictureInPicture(player,win,{});
+assert.equal(player.video.disablePictureInPicture,true,'Prevent native video-only PiP from silently losing captions');
+const late=controller.toggle();controller.close();resolveWindow({close(){closed++;}});await late;
+assert.equal(closed,1);assert.equal(controller.active,false,'Late popup cannot adopt a player after cancellation');
+const destroyed=controller.toggle();destroy();resolveWindow({close(){closed++;}});await destroyed;
+assert.equal(closed,2);assert.equal(player.video.disablePictureInPicture,false,'Teardown restores the original video capability');
+const unsupported=installCaptionPictureInPicture({video:{},template:{$player:{}},on(){}},{isSecureContext:true,addEventListener(){},removeEventListener(){}},{});
+await assert.rejects(unsupported.toggle(),/不支持带字幕/);
+console.log('PASS: caption PiP capability, no video-only fallback, delayed cancellation and destroy cleanup');

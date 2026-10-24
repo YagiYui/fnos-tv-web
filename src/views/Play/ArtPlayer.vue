@@ -40,6 +40,7 @@ export default {
     const instance = this._playerInstance;
     this._playerInstance = null;
     if (instance && instance.destroy) {
+      instance.fnosCaptionPiP?.close();
       instance.destroy(false);
     }
   },

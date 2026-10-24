@@ -42,7 +42,7 @@ let view = mount(original), image = view.image();
 assert.equal(image.props.src, original); assert.equal(image.props.loading, 'lazy');
 image.props.onError({target: image}); image.props.onError({target: image});
 assert.equal(timers.size, 1, 'Duplicate error events schedule one retry');
-await tick(500);
+await tick(250);
 assert.notEqual(view.image(), image, 'Failed image is replaced so a new request can start');
 assert.equal(view.image().props.src, '/fnos/v/api/v1/sys/img/example.webp?w=300&__fnos_image_retry=1#poster');
 image.props.onError({target: image}); assert.equal(timers.size, 0, 'Removed image events are ignored');
@@ -51,7 +51,7 @@ assert.equal(imageLoading(original), 'eager', 'Retry success warms the original 
 assert.equal(timers.size, 0); view.stop();
 
 view = mount('/fnos/v/api/v1/sys/img/missing.webp');
-for (const delay of [500, 1500, 3000, 8000, 15000]) {
+for (const delay of [250, 500, 1000, 1500, 2500]) {
   image = view.image(); image.props.onError({target: image}); await tick(delay);
 }
 image = view.image(); image.props.onError({target: image});
@@ -61,7 +61,7 @@ let prevented = false;
 image.props.onClick({type: 'click', preventDefault: () => { prevented = true; }, stopPropagation() {}}); await Vue.nextTick();
 assert.ok(prevented, 'Retry does not open the movie detail');
 assert.ok(view.image().props.src.endsWith('__fnos_image_retry=6'), 'Manual retry gets a fresh URL after automatic retries exhaust');
-view.image().props.onError({target: view.image()}); await tick(500);
+view.image().props.onError({target: view.image()}); await tick(250);
 view.stop();
 
 view = mount('/fnos/v/api/v1/sys/img/old.webp'); image = view.image();
@@ -78,7 +78,7 @@ assert.equal(timers.size, 0, 'Unmount cancels retries');
 image.props.onError({target: image}); assert.equal(timers.size, 0);
 
 const custom = 'https://images.example.invalid/poster.webp?signature=example';
-view = mount(custom); image = view.image(); image.props.onError({target: image}); await tick(500);
+view = mount(custom); image = view.image(); image.props.onError({target: image}); await tick(250);
 assert.equal(view.image().props.src, custom, 'Custom image URLs and their signatures remain unchanged');
 assert.notEqual(view.image(), image, 'Custom URL retry also creates a fresh image element'); view.stop();
 assert.equal(timers.size, 0);
