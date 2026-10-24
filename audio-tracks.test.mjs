@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {PlaybackSession} from './src/views/Play/playback-session.js';
 import {primaryMediaFile} from './src/views/Play/playback-metadata.js';
+import {createPlayerPreferenceStore} from './src/views/Play/player-preferences.js';
 import {chooseAudio, audioLabel, readPlayerPreference, writePlayerPreference, createAutoplayCountdown} from './src/views/Play/audio-tracks.js';
 const tracks = [{guid:'en',language:'eng',codec_name:'aac',channels:2},
   {guid:'zh',language:'zho',codec_name:'ac3',channels:6,is_default:1}];
@@ -27,7 +28,10 @@ countdown.start(2);countdown.start(1);assert.equal(timers.size,1);tick();assert.
 
 const source = fs.readFileSync('./src/views/Play/VideoPlayer.vue', 'utf8');
 const calls = [], messages = [];
+const audioPreferencesStore = createPlayerPreferenceStore(() => storage);
 const state = vm.createContext({Math, audioLabel, writePlayerPreference, primaryMediaFile,
+  preferenceHandle: audioPreferencesStore.bindAccount('one'),
+  savePlayerPreference: (name, value, handle) => handle.write(name, value),
   playbackSession: new PlaybackSession(), localStorage: storage,
   preferredAudioLanguage: {value: ''}, currentAudio: {value: tracks[0]},
   StreamList: {value: {audio_streams: tracks, video_streams: [{guid:'video',codec_name:'h264',bps:100}], files:[{guid:'file',path:'/movie.mkv'}]}},
@@ -53,4 +57,15 @@ state.COMMON.requests=async(method,path,auth,payload)=>{calls.push(payload);retu
 state.currentAudio.value=null;
 await state.GetPalyUrl(0);
 assert.equal(calls.at(-1).audio_guid,'');
+// A completed source switch must not save an old account's language after A -> B -> A.
+state.currentAudio.value = tracks[1];
+let finishSwitch;
+state.art.switchUrl = () => new Promise(resolve => { finishSwitch = resolve; });
+const lateAudio = state.switchAudio({guid:'en'});
+while (!finishSwitch) await Promise.resolve();
+state.playbackSession.cancel();
+audioPreferencesStore.bindAccount('two');
+state.preferenceHandle = audioPreferencesStore.bindAccount('one');
+finishSwitch(); await lateAudio;
+assert.equal(data.get('fnosPlayer:one:audioLanguage'), '"zho"');
 console.log('PASS: audio language/default/no-audio, account-scoped preferences and cancelable autoplay countdown');

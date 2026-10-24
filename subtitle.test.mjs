@@ -112,7 +112,7 @@ const flow={StreamList:{value:{video_streams:[{media_guid:'actual-media-file'}],
     flowCalls.push(args);return args[1].endsWith('/search')?{subtitles:[{trim_id:'online-id',filename:'chosen.srt',format:'srt'}]}:{guid:'fresh-track',index:0};
   }}};
 vm.createContext(flow);
-vm.runInContext(src.slice(src.indexOf('function subtitleMediaGuid('),src.indexOf('const subtitleFontSizeKey')),flow);
+vm.runInContext(src.slice(src.indexOf('function subtitleMediaGuid('),src.indexOf('const subtitleFontSize =')),flow);
 await flow.searchSubtitles();assert.equal(flow.subtitleSearchDone.value,true);
 assert.equal(flowCalls[0][3].media_guid,'actual-media-file');assert.equal(flowCalls[0][3].lan,'zh-CN');
 await flow.useSearchedSubtitle(flow.subtitleResults.value[0]);

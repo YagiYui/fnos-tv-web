@@ -18,7 +18,9 @@ import {PlaybackSession, createProgressReporter} from './playback-session.js';
 import {loadPlaybackMetadata, primaryMediaFile} from './playback-metadata.js';
 import PlaybackRecoveryCard from './PlaybackRecoveryCard.vue';
 import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRecoverableSource, bufferedPlaybackFailure} from './playback-recovery.js';
-import {chooseAudio, audioLabel, readPlayerPreference, writePlayerPreference, createAutoplayCountdown} from './audio-tracks.js';
+import {chooseAudio, audioLabel, createAutoplayCountdown} from './audio-tracks.js';
+import {createPlayerPreferenceStore} from './player-preferences.js';
+import {useBrowseSnapshots} from '../../store.js';
 const playbackSession = new PlaybackSession();
 import {installMobileFullscreen} from './mobile-fullscreen.js';
 import {installMobileDanmaku} from './mobile-danmaku.js';
@@ -39,9 +41,21 @@ const instance = getCurrentInstance();
 const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
 const device = proxy.$device;
+const accountState = useBrowseSnapshots();
+const playerPreferences = createPlayerPreferenceStore();
+let preferenceHandle = playerPreferences.bindAccount(accountState.account);
+let preferenceWarningShown = false;
+function savePlayerPreference(name, value, handle = preferenceHandle) {
+  const result = handle.write(name, value);
+  if (result.accepted && !result.persisted && !preferenceWarningShown) {
+    preferenceWarningShown = true;
+    COMMON.ShowMsg('播放设置仅对本次有效，浏览器未能保存；刷新后可能恢复原值');
+  }
+  return result.accepted;
+}
 const currentAudio = ref(null);
-const preferredAudioLanguage = ref(readPlayerPreference(localStorage, COMMON.userKey, 'audioLanguage', ''));
-const autoPlayNext = ref(readPlayerPreference(localStorage, COMMON.userKey, 'autoPlayNext', true));
+const preferredAudioLanguage = ref(preferenceHandle.read('audioLanguage'));
+const autoPlayNext = ref(preferenceHandle.read('autoPlayNext'));
 const stopAfterCurrent = ref(false);
 let autoplayPanel = null, autoplayText = null;
 const autoplayCountdown = createAutoplayCountdown(remaining => {
@@ -299,7 +313,7 @@ async function useDanmakuEpisode() {
 const currentSubtitle = ref(null);
 let serverSubtitleGuid = null;
 let subtitleSwitchGeneration = 0;
-const useAssSubtitles = ref(localStorage.getItem('fnosAssSubtitles') !== 'false');
+const useAssSubtitles = ref(preferenceHandle.read('assSubtitles'));
 const subtitleRenderMode = ref('text');
 const assRenderer = new SubtitleOverlay({onFailure: error => {
   COMMON.ShowMsg(errorText(error) + '，正在切换普通字幕');
@@ -388,23 +402,15 @@ async function reloadSelectedSubtitle() {
   await switchSubtitle(selected ? {...selected, html: selected.title || '字幕', forceReload: true}
     : {guid: null, index: -1, html: '关闭字幕'});
 }
-const subtitleFontSizeKey = 'fnosSubtitleFontSize';
-function savedSubtitleFontSize() {
-  try {
-    const saved = localStorage.getItem(subtitleFontSizeKey);
-    const value = Number(saved);
-    return saved && Number.isFinite(value) ? Math.min(60, Math.max(12, Math.round(value))) : 20;
-  } catch { return 20; }
-}
-const subtitleFontSize = ref(savedSubtitleFontSize());
-function setSubtitleFontSize(value) {
+const subtitleFontSize = ref(preferenceHandle.read('subtitleFontSize'));
+function setSubtitleFontSize(value, {persist = true, handle = preferenceHandle} = {}) {
+  if (!handle.isCurrent()) return `${subtitleFontSize.value}px`;
   subtitleFontSize.value = Math.min(60, Math.max(12, Math.round(Number(value) || 20)));
   if (art) art.subtitle.style({fontSize: `${subtitleFontSize.value}px`});
-  try { localStorage.setItem(subtitleFontSizeKey, String(subtitleFontSize.value)); } catch {}
+  if (persist) savePlayerPreference('subtitleFontSize', subtitleFontSize.value, handle);
   return `${subtitleFontSize.value}px`;
 }
-const use302Play = localStorage.getItem('use_302_play');
-const use_302_play = ref(use302Play === null ? false : use302Play === 'true')
+const use_302_play = ref(preferenceHandle.read('use302'));
 let currentVttBlob = null;
 let subtitleErrorShown = false;
 const subtitleLoader = new SegmentedSubtitleLoader({
@@ -567,10 +573,10 @@ function selectPlayback(query) {
 }
 selectPlayback(proxy.$route.query);
 
-var danmu_setting = window.localStorage.danmu_setting;
-if (danmu_setting === undefined) {
-  danmu_setting = JSON.stringify({
-    value: {
+let danmu_setting;
+try { danmu_setting = JSON.parse(window.localStorage.getItem('danmu_setting'))?.value; } catch {}
+if (!danmu_setting || typeof danmu_setting !== 'object' || Array.isArray(danmu_setting)) {
+  danmu_setting = {
       speed: 8.5,
       opacity: 0.5,
       fontSize: window.innerWidth <= 768 ? '2.5%' : '3%',
@@ -585,10 +591,8 @@ if (danmu_setting === undefined) {
       beforeEmit: (danmu) => !!danmu.text.trim(),
       emitter: false,
       mount: undefined
-    }
-  })
+  };
 }
-danmu_setting = JSON.parse(danmu_setting).value
 
 const setting = ref({
   url: "",
@@ -974,6 +978,7 @@ const progressReporter = createProgressReporter(playbackRecordSnapshot,
   () => { if (art) art.notice.show = '播放进度暂未同步，将在下次上报时重试'; });
 
 async function switchAudio(item) {
+  const audioPreferences = preferenceHandle;
   const selected = StreamList.value?.audio_streams?.find(track => track.guid === item.guid);
   if (!selected || selected.guid === currentAudio.value?.guid) return audioLabel(currentAudio.value);
   const previous = currentAudio.value;
@@ -989,10 +994,11 @@ async function switchAudio(item) {
     currentAudio.value = selected;
     playInfo.value.watched_ts = position;
     await art.switchUrl(url.value);
+    operation.assertCurrent();
     if (paused) art.pause();
     if (selected.language) {
       preferredAudioLanguage.value = selected.language;
-      writePlayerPreference(localStorage, COMMON.userKey, 'audioLanguage', selected.language);
+      savePlayerPreference('audioLanguage', selected.language, audioPreferences);
     }
     if (previousLink && previousLink !== urlBase.value) void mediaP('media.quit', previousLink).catch(() => {});
     return audioLabel(selected);
@@ -1182,6 +1188,7 @@ async function addEpisodeNavigation(player, controls) {
 }
 
 async function UpdateControl(_art) {
+  const controlPreferences = preferenceHandle;
   let forData = []
 
   // 添加画质选择器
@@ -1216,7 +1223,9 @@ async function UpdateControl(_art) {
     html: art.playbackRate + '×',
     selector: [0.5, 0.8, 1, 1.2, 1.5, 1.8, 2, 2.5, 2.8, 3].map(rate => ({rate, html: `${rate}×`})),
     onSelect: function (item, $dom) {
-      art.playbackRate = item.rate;
+      if (!controlPreferences.isCurrent()) return `${_art.playbackRate}×`;
+      _art.playbackRate = item.rate;
+      savePlayerPreference('playbackRate', item.rate, controlPreferences);
       return `${item.rate}×`;
     },
   }
@@ -1300,8 +1309,8 @@ async function UpdateControl(_art) {
   await addArtConfig(_art, 'setting', {
     name: '字幕大小', html: '字幕大小', tooltip: `${subtitleFontSize.value}px`,
     range: [subtitleFontSize.value, 12, 60, 1],
-    onChange: item => setSubtitleFontSize(item.range[0]),
-    onRange: item => setSubtitleFontSize(item.range[0])
+    onChange: item => setSubtitleFontSize(item.range[0], {handle: controlPreferences}),
+    onRange: item => setSubtitleFontSize(item.range[0], {handle: controlPreferences})
   });
   const audioTracks = StreamList.value?.audio_streams || [];
   await addArtConfig(_art, 'setting', {
@@ -1313,8 +1322,9 @@ async function UpdateControl(_art) {
   await addArtConfig(_art, 'setting', {
     name: '自动连播', html: '自动连播', switch: autoPlayNext.value,
     onSwitch: item => {
+      if (!controlPreferences.isCurrent()) return item.switch;
       autoPlayNext.value = !item.switch;
-      writePlayerPreference(localStorage, COMMON.userKey, 'autoPlayNext', autoPlayNext.value);
+      savePlayerPreference('autoPlayNext', autoPlayNext.value, controlPreferences);
       if (!autoPlayNext.value) autoplayCountdown.cancel();
       return autoPlayNext.value;
     }
@@ -1331,8 +1341,9 @@ async function UpdateControl(_art) {
     name: 'ASS特效字幕', html: 'ASS 特效字幕', tooltip: useAssSubtitles.value ? '原始样式' : '普通字幕',
     switch: useAssSubtitles.value,
     onSwitch: item => {
+      if (!controlPreferences.isCurrent()) return item.switch;
       useAssSubtitles.value = !item.switch;
-      localStorage.setItem('fnosAssSubtitles', String(useAssSubtitles.value));
+      savePlayerPreference('assSubtitles', useAssSubtitles.value, controlPreferences);
       if (currentSubtitle.value) void switchSubtitleUrl().catch(showSubtitleError);
       return useAssSubtitles.value;
     }
@@ -1363,8 +1374,9 @@ async function UpdateControl(_art) {
     tooltip: use_302_play.value ? '开启' : '关闭',
     switch: use_302_play.value,
     onSwitch: async function (item, $dom, event) {
+      if (!controlPreferences.isCurrent()) return item.switch;
       use_302_play.value = !item.switch;
-      localStorage.use_302_play = use_302_play.value
+      savePlayerPreference('use302', use_302_play.value, controlPreferences);
       let _url = url.value;
       let _currentTime = art.currentTime;
       if (use_302_play.value) {
@@ -1555,7 +1567,7 @@ async function ready() {
   if (timerSendPlayRecord.value !== null) {
     clearInterval(timerSendPlayRecord.value)
   }
-  art.playbackRate = localStorage.playbackRate
+  if (!art.fnosTemporarySpeed) art.playbackRate = preferenceHandle.read('playbackRate');
   art.loading.show = false;
   timerSendPlayRecord.value = setInterval(SendPlayRecord, 10000)
   art.seek = playInfo.value.watched_ts
@@ -1602,7 +1614,7 @@ const artF = async (data) => {
   });
   player.on('video:play', () => { if (current() && !recoveryState.value) sourcePaused = false; });
   player.on('video:pause', () => { if (current() && !recoveryState.value) sourcePaused = true; });
-  setSubtitleFontSize(subtitleFontSize.value);
+  setSubtitleFontSize(subtitleFontSize.value, {persist: false});
   bindSubtitleTrack(art);
   art.on('subtitleLoad', () => {
     if (currentSubtitle.value) art.subtitle.update();
@@ -1613,7 +1625,6 @@ const artF = async (data) => {
   art.on('ready', ready);
   art.on('video:ratechange', () => {
     if (!art.fnosTemporarySpeed) {
-      localStorage.playbackRate = art.playbackRate;
       const speedSetting = art.setting.find('倍速设置');
       if (speedSetting) speedSetting.tooltip = `${art.playbackRate}×`;
     }
@@ -1759,6 +1770,7 @@ async function getInstance(_art) {
 
 let initializationGeneration = 0;
 const onMountedFun = async () => {
+  if (!preferenceHandle.isCurrent()) return;
   const generation = ++initializationGeneration;
   loading.value = !art;
   playbackError.value = '';
@@ -1777,6 +1789,41 @@ const onMountedFun = async () => {
   }
 };
 const playbackError = ref('');
+let playerMounted = false;
+watch(() => accountState.revision, () => {
+  // Never reuse a handle after an account transition, even A -> B -> A.
+  preferenceHandle = playerPreferences.bindAccount(accountState.account);
+  preferenceWarningShown = false;
+  preferredAudioLanguage.value = preferenceHandle.read('audioLanguage');
+  autoPlayNext.value = preferenceHandle.read('autoPlayNext');
+  useAssSubtitles.value = preferenceHandle.read('assSubtitles');
+  subtitleFontSize.value = preferenceHandle.read('subtitleFontSize');
+  use_302_play.value = preferenceHandle.read('use302');
+  if (!playerMounted) return;
+  initializationGeneration++;
+  playbackSession.cancel();
+  recoveryRun++;
+  autoplayCountdown.cancel();
+  releaseExternalSession();
+  clearPlaybackRecovery();
+  bufferedRecovery?.dispose();
+  if (timerSendPlayRecord.value !== null) clearInterval(timerSendPlayRecord.value);
+  timerSendPlayRecord.value = null;
+  art?.pause();
+  if (art) releaseMediaEngine(art);
+  art = null;
+  recoveryTarget.value = null;
+  playInfo.value = null;
+  StreamList.value = null;
+  currentAudio.value = null;
+  currentSubtitle.value = null;
+  EpisodeList.value = null;
+  urlBase.value = '';
+  url.value = '';
+  loading.value = true;
+  playbackError.value = '';
+  if (preferenceHandle.isCurrent()) void onMountedFun();
+}, {flush: 'sync'});
 
 onBeforeRouteUpdate(async (to, from) => {
   releaseExternalSession();
@@ -1808,6 +1855,8 @@ onBeforeRouteLeave(async (to, from) => {
 });
 
 onBeforeUnmount(async () => {
+  playerMounted = false;
+  playerPreferences.clearAccount();
   releaseExternalSession();
   initializationGeneration++;
   recoveryRun++;
@@ -1830,6 +1879,7 @@ onBeforeUnmount(async () => {
   }
 })
 onMounted(async () => {
+  playerMounted = true;
   await onMountedFun();
 })
 const flushHiddenProgress = () => { if (document.hidden) void SendPlayRecord(); };

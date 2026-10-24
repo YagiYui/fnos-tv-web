@@ -1,4 +1,4 @@
-// F2.2 data layer. Page integration is deliberately separate from the settings layout.
+// Account-scoped preferences; transient playback state is never persisted here.
 export const PLAYER_PREFERENCE_DEFAULTS = Object.freeze({
   audioLanguage: '', autoPlayNext: true, assSubtitles: true,
   subtitleFontSize: 20, playbackRate: 1, use302: false,
@@ -39,6 +39,7 @@ export function createPlayerPreferenceStore(getStorage = () => window.localStora
         return PLAYER_PREFERENCE_DEFAULTS[name];
       };
       return Object.freeze({
+        isCurrent: active,
         read,
         write(name, value) {
           validateName(name);
