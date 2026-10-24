@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {createPlayerPreferenceStore} from './src/views/Play/player-preferences.js';
+import {GESTURE_HOLD_RATES} from './src/views/Play/gesture-settings.js';
 const source = fs.readFileSync('./src/views/Play/VideoPlayer.vue', 'utf8');
 const part = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const values = new Map([
@@ -19,7 +20,10 @@ const ref = value => ({value});
 const makePlayer = () => ({playbackRate: 1, currentTime: 12, video: {paused: true}, loading: {},
   subtitle: {style() {}}, controls: {remove() {}}, setting: {remove() {}},
   layers: {update() {}}, plugins: {artplayerPluginDanmuku: {reset() {}}}, pause() {events.push('pause');}});
-const ctx = vm.createContext({ref, useBrowseSnapshots: () => account,
+const disposeGestures = () => events.push('dispose-gestures');
+disposeGestures.refresh = () => events.push('refresh-gestures');
+const ctx = vm.createContext({ref, shallowRef: ref, useBrowseSnapshots: () => account, GESTURE_HOLD_RATES,
+  disposeMobileGestures: disposeGestures,
   createPlayerPreferenceStore: () => createPlayerPreferenceStore(() => storage),
   COMMON: {ShowMsg: value => notices.push(value), fnHost: '/fnos'}, art: makePlayer(),
   qualitySelector: ref([]), EpisodeList: ref(null), StreamList: ref(null), currentSubtitle: ref(null),
@@ -62,20 +66,50 @@ controls.get('setting:字幕大小').onChange({range: [32]});
 await controls.get('setting:是否开启302').onSwitch({switch: true});
 for (const [name, value] of [['autoPlayNext', 'true'], ['assSubtitles', 'true'],
   ['subtitleFontSize', '32'], ['use302', 'false']]) assert.equal(values.get(`fnosPlayer:alice:${name}`), value);
+assert.equal(controls.get('setting:触摸手势').onSwitch({switch: true}), false);
+assert.equal(values.get('fnosPlayer:alice:gesturesEnabled'), 'false');
+assert.equal(controls.get('setting:长按加速倍率').onSelect({rate: 2.5}), '2.5×');
+assert.equal(values.get('fnosPlayer:alice:gestureHoldRate'), '2.5');
+controls.get('setting:长按加速倍率').onSelect({rate: 9});
+assert.equal(values.get('fnosPlayer:alice:gestureHoldRate'), '2.5');
+const beforeReset = new Map(values), oldSize = controls.get('setting:字幕大小');
+controls.get('setting:恢复播放偏好').onClick();
+assert.equal(read('showPreferenceReset.value'), true);
+assert.deepEqual(values, beforeReset, 'Opening reset dialog never writes preferences');
+read('showPreferenceReset.value = false'); // Cancel does not invoke confirmation.
+assert.deepEqual(values, beforeReset);
+values.set('fnosPlayer:bob:playbackRate', '2'); values.set('searchHistory', 'keep');
+controls.get('setting:恢复播放偏好').onClick();
+await ctx.confirmPlayerPreferenceReset();
+assert.equal(values.has('fnosPlayer:alice:gestureHoldRate'), false);
+assert.equal(read('gestureHoldRate.value'), 2); assert.equal(read('gesturesEnabled.value'), true);
+assert.equal(ctx.art.playbackRate, 1); assert.equal(read('subtitleFontSize.value'), 20);
+assert.equal(read('autoPlayNext.value'), true);
+assert.equal(values.get('fnosPlayer:bob:playbackRate'), '2'); assert.equal(values.get('searchHistory'), 'keep');
+oldSize.onChange({range: [45]}); assert.equal(values.has('fnosPlayer:alice:subtitleFontSize'), false);
+// Put explicit values back using the new menu; old callbacks remain invalid after reset.
+await controls.get('setting:倍速设置').onSelect({rate: 1.8});
+controls.get('setting:字幕大小').onChange({range: [32]});
 const staleSpeed = controls.get('setting:倍速设置'), staleAuto = controls.get('setting:自动连播');
 read('playerMounted = true'); account.account = 'bob'; account.revision++; accountChanged();
 assert.equal(ctx.art, null); assert.equal(events.includes('abort'), true); assert.equal(events.includes('initialize'), true);
 assert.equal(read('autoPlayNext.value'), true); assert.equal(read('subtitleFontSize.value'), 20);
 await staleSpeed.onSelect({rate: 3}); staleAuto.onSwitch({switch: true});
-assert.equal(values.has('fnosPlayer:bob:playbackRate'), false);
+assert.equal(values.get('fnosPlayer:bob:playbackRate'), '2');
 assert.equal(read('autoPlayNext.value'), true, 'Destroyed menu cannot change new account state');
 account.account = 'alice'; account.revision++; accountChanged();
 assert.equal(read('subtitleFontSize.value'), 32);
 await staleSpeed.onSelect({rate: 3});
 assert.equal(values.get('fnosPlayer:alice:playbackRate'), '1.8', 'Old A menu stays invalid after A -> B -> A');
+controls.get('setting:恢复播放偏好').onClick();
+const staleResetCount = values.size;
+account.account = 'bob'; account.revision++; accountChanged();
+await ctx.confirmPlayerPreferenceReset(); assert.equal(values.size, staleResetCount, 'Account transition cancels pending reset');
+account.account = 'alice'; account.revision++; accountChanged();
 failSave = true;
+const noticesBeforeSave = notices.length;
 read("savePlayerPreference('subtitleFontSize', 24); savePlayerPreference('subtitleFontSize', 26)");
-assert.equal(notices.length, 1); assert.match(notices[0], /仅对本次有效/);
+assert.equal(notices.length, noticesBeforeSave + 1); assert.match(notices.at(-1), /仅对本次有效/);
 assert.equal(read("preferenceHandle.read('subtitleFontSize')"), 26);
 account.account = ''; account.revision++; accountChanged();
 assert.equal(read("savePlayerPreference('playbackRate', 2)"), false);

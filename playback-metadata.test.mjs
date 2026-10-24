@@ -60,7 +60,7 @@ rejected = assert.rejects(pending, /画质/); api.calls[1].resolve(streams); awa
 const source = fs.readFileSync(new URL('./src/views/Play/VideoPlayer.vue', import.meta.url), 'utf8');
 function player() {
   const api = requestsFixture(), events = [], notices = [];
-  const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController,
+  const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController, loadPlayerPreferences() {},
     recoveryState: {value: null}, recoveryBusy: {value: false}, recoveryRun: 0,
     sourceTimer: null, sourceEpisode: null, sourcePosition: null, sourcePaused: false,
     clearTimeout() {}, clearPlaybackRecovery() { ctx.recoveryState.value = null; },

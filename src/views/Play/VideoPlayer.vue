@@ -20,6 +20,7 @@ import PlaybackRecoveryCard from './PlaybackRecoveryCard.vue';
 import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRecoverableSource, bufferedPlaybackFailure} from './playback-recovery.js';
 import {chooseAudio, audioLabel, createAutoplayCountdown} from './audio-tracks.js';
 import {createPlayerPreferenceStore} from './player-preferences.js';
+import {GESTURE_HOLD_RATES} from './gesture-settings.js';
 import {useBrowseSnapshots} from '../../store.js';
 const playbackSession = new PlaybackSession();
 import {installMobileFullscreen} from './mobile-fullscreen.js';
@@ -45,6 +46,7 @@ const accountState = useBrowseSnapshots();
 const playerPreferences = createPlayerPreferenceStore();
 let preferenceHandle = playerPreferences.bindAccount(accountState.account);
 let preferenceWarningShown = false;
+let preferenceResetGeneration = 0;
 function savePlayerPreference(name, value, handle = preferenceHandle) {
   const result = handle.write(name, value);
   if (result.accepted && !result.persisted && !preferenceWarningShown) {
@@ -56,6 +58,8 @@ function savePlayerPreference(name, value, handle = preferenceHandle) {
 const currentAudio = ref(null);
 const preferredAudioLanguage = ref(preferenceHandle.read('audioLanguage'));
 const autoPlayNext = ref(preferenceHandle.read('autoPlayNext'));
+const gesturesEnabled = ref(preferenceHandle.read('gesturesEnabled'));
+const gestureHoldRate = ref(preferenceHandle.read('gestureHoldRate'));
 const stopAfterCurrent = ref(false);
 let autoplayPanel = null, autoplayText = null;
 const autoplayCountdown = createAutoplayCountdown(remaining => {
@@ -411,6 +415,57 @@ function setSubtitleFontSize(value, {persist = true, handle = preferenceHandle} 
   return `${subtitleFontSize.value}px`;
 }
 const use_302_play = ref(preferenceHandle.read('use302'));
+const showPreferenceReset = ref(false);
+const preferenceResetTarget = shallowRef(null);
+const preferenceResetBusy = ref(false);
+let preferenceResetOwner = null;
+let preferenceResetVersion = 0;
+function loadPlayerPreferences({streamChanges = true} = {}) {
+  preferredAudioLanguage.value = preferenceHandle.read('audioLanguage');
+  autoPlayNext.value = preferenceHandle.read('autoPlayNext');
+  gesturesEnabled.value = preferenceHandle.read('gesturesEnabled');
+  gestureHoldRate.value = preferenceHandle.read('gestureHoldRate');
+  setSubtitleFontSize(preferenceHandle.read('subtitleFontSize'), {persist: false});
+  if (streamChanges) {
+    useAssSubtitles.value = preferenceHandle.read('assSubtitles');
+    use_302_play.value = preferenceHandle.read('use302');
+  }
+}
+function requestPlayerPreferenceReset(owner = preferenceHandle, version = preferenceResetGeneration) {
+  if (!owner.isCurrent() || version !== preferenceResetGeneration) return;
+  preferenceResetOwner = owner;
+  preferenceResetVersion = version;
+  preferenceResetTarget.value = art?.fullscreen || art?.fullscreenWeb ? art.template.$player : null;
+  if (art) art.setting.show = false;
+  showPreferenceReset.value = true;
+}
+async function confirmPlayerPreferenceReset() {
+  const owner = preferenceResetOwner;
+  if (preferenceResetBusy.value || owner !== preferenceHandle || !owner?.isCurrent()
+      || preferenceResetVersion !== preferenceResetGeneration) {
+    showPreferenceReset.value = false;
+    return;
+  }
+  preferenceResetBusy.value = true;
+  try {
+    const result = owner.reset();
+    if (!result.accepted) return;
+    preferenceResetGeneration++;
+    disposeMobileGestures.refresh?.();
+    loadPlayerPreferences({streamChanges: false});
+    disposeMobileGestures.refresh?.();
+    const player = art;
+    if (player) player.playbackRate = owner.read('playbackRate');
+    autoplayCountdown.cancel();
+    showPreferenceReset.value = false;
+    COMMON.ShowMsg(result.persisted
+      ? '已恢复播放偏好；音轨、ASS 样式和 302 将在重新打开影片或切集时生效'
+      : '本次已恢复默认，但浏览器未能完整保存；刷新后可能恢复原值');
+    if (player) await UpdateControl(player);
+  } catch {
+    if (owner === preferenceHandle && owner.isCurrent()) COMMON.ShowMsg('偏好重置后菜单未能更新，请重新打开播放器');
+  } finally { preferenceResetBusy.value = false; }
+}
 let currentVttBlob = null;
 let subtitleErrorShown = false;
 const subtitleLoader = new SegmentedSubtitleLoader({
@@ -979,6 +1034,7 @@ const progressReporter = createProgressReporter(playbackRecordSnapshot,
 
 async function switchAudio(item) {
   const audioPreferences = preferenceHandle;
+  const audioPreferenceVersion = preferenceResetGeneration;
   const selected = StreamList.value?.audio_streams?.find(track => track.guid === item.guid);
   if (!selected || selected.guid === currentAudio.value?.guid) return audioLabel(currentAudio.value);
   const previous = currentAudio.value;
@@ -996,7 +1052,7 @@ async function switchAudio(item) {
     await art.switchUrl(url.value);
     operation.assertCurrent();
     if (paused) art.pause();
-    if (selected.language) {
+    if (selected.language && audioPreferences.isCurrent() && audioPreferenceVersion === preferenceResetGeneration) {
       preferredAudioLanguage.value = selected.language;
       savePlayerPreference('audioLanguage', selected.language, audioPreferences);
     }
@@ -1189,6 +1245,8 @@ async function addEpisodeNavigation(player, controls) {
 
 async function UpdateControl(_art) {
   const controlPreferences = preferenceHandle;
+  const controlVersion = preferenceResetGeneration;
+  const controlsCurrent = () => controlPreferences.isCurrent() && controlVersion === preferenceResetGeneration;
   let forData = []
 
   // 添加画质选择器
@@ -1223,7 +1281,7 @@ async function UpdateControl(_art) {
     html: art.playbackRate + '×',
     selector: [0.5, 0.8, 1, 1.2, 1.5, 1.8, 2, 2.5, 2.8, 3].map(rate => ({rate, html: `${rate}×`})),
     onSelect: function (item, $dom) {
-      if (!controlPreferences.isCurrent()) return `${_art.playbackRate}×`;
+      if (!controlsCurrent()) return `${_art.playbackRate}×`;
       _art.playbackRate = item.rate;
       savePlayerPreference('playbackRate', item.rate, controlPreferences);
       return `${item.rate}×`;
@@ -1309,20 +1367,20 @@ async function UpdateControl(_art) {
   await addArtConfig(_art, 'setting', {
     name: '字幕大小', html: '字幕大小', tooltip: `${subtitleFontSize.value}px`,
     range: [subtitleFontSize.value, 12, 60, 1],
-    onChange: item => setSubtitleFontSize(item.range[0], {handle: controlPreferences}),
-    onRange: item => setSubtitleFontSize(item.range[0], {handle: controlPreferences})
+    onChange: item => controlsCurrent() ? setSubtitleFontSize(item.range[0], {handle: controlPreferences}) : `${subtitleFontSize.value}px`,
+    onRange: item => controlsCurrent() ? setSubtitleFontSize(item.range[0], {handle: controlPreferences}) : `${subtitleFontSize.value}px`
   });
   const audioTracks = StreamList.value?.audio_streams || [];
   await addArtConfig(_art, 'setting', {
     name: '音轨选择', html: '音轨', tooltip: audioLabel(currentAudio.value),
     selector: audioTracks.length ? audioTracks.map(track => ({guid: track.guid,
       html: audioLabel(track), default: track.guid === currentAudio.value?.guid})) : [{html: '当前影片无音轨'}],
-    onSelect: switchAudio
+    onSelect: item => controlsCurrent() ? switchAudio(item) : audioLabel(currentAudio.value)
   });
   await addArtConfig(_art, 'setting', {
     name: '自动连播', html: '自动连播', switch: autoPlayNext.value,
     onSwitch: item => {
-      if (!controlPreferences.isCurrent()) return item.switch;
+      if (!controlsCurrent()) return item.switch;
       autoPlayNext.value = !item.switch;
       savePlayerPreference('autoPlayNext', autoPlayNext.value, controlPreferences);
       if (!autoPlayNext.value) autoplayCountdown.cancel();
@@ -1330,8 +1388,34 @@ async function UpdateControl(_art) {
     }
   });
   await addArtConfig(_art, 'setting', {
+    name: '触摸手势', html: '触摸手势', tooltip: '全屏触摸时生效', switch: gesturesEnabled.value,
+    onSwitch: item => {
+      if (!controlsCurrent()) return item.switch;
+      gesturesEnabled.value = !item.switch;
+      savePlayerPreference('gesturesEnabled', gesturesEnabled.value, controlPreferences);
+      disposeMobileGestures.refresh?.();
+      return gesturesEnabled.value;
+    }
+  });
+  await addArtConfig(_art, 'setting', {
+    name: '长按加速倍率', html: '长按加速倍率', tooltip: `${gestureHoldRate.value}×`,
+    selector: GESTURE_HOLD_RATES.map(rate => ({rate, html: `${rate}×`, default: rate === gestureHoldRate.value})),
+    onSelect: item => {
+      if (!controlsCurrent() || !GESTURE_HOLD_RATES.includes(item.rate)) return `${gestureHoldRate.value}×`;
+      gestureHoldRate.value = item.rate;
+      savePlayerPreference('gestureHoldRate', item.rate, controlPreferences);
+      disposeMobileGestures.refresh?.();
+      return `${item.rate}×`;
+    }
+  });
+  await addArtConfig(_art, 'setting', {
+    name: '恢复播放偏好', html: '恢复本账号播放偏好', tooltip: '仅当前账号与浏览器',
+    onClick: () => requestPlayerPreferenceReset(controlPreferences, controlVersion)
+  });
+  await addArtConfig(_art, 'setting', {
     name: '播完本集停止', html: '播完本集停止', switch: stopAfterCurrent.value,
     onSwitch: item => {
+      if (!controlsCurrent()) return item.switch;
       stopAfterCurrent.value = !item.switch;
       if (stopAfterCurrent.value) autoplayCountdown.cancel();
       return stopAfterCurrent.value;
@@ -1341,7 +1425,7 @@ async function UpdateControl(_art) {
     name: 'ASS特效字幕', html: 'ASS 特效字幕', tooltip: useAssSubtitles.value ? '原始样式' : '普通字幕',
     switch: useAssSubtitles.value,
     onSwitch: item => {
-      if (!controlPreferences.isCurrent()) return item.switch;
+      if (!controlsCurrent()) return item.switch;
       useAssSubtitles.value = !item.switch;
       savePlayerPreference('assSubtitles', useAssSubtitles.value, controlPreferences);
       if (currentSubtitle.value) void switchSubtitleUrl().catch(showSubtitleError);
@@ -1374,7 +1458,7 @@ async function UpdateControl(_art) {
     tooltip: use_302_play.value ? '开启' : '关闭',
     switch: use_302_play.value,
     onSwitch: async function (item, $dom, event) {
-      if (!controlPreferences.isCurrent()) return item.switch;
+      if (!controlsCurrent()) return item.switch;
       use_302_play.value = !item.switch;
       savePlayerPreference('use302', use_302_play.value, controlPreferences);
       let _url = url.value;
@@ -1398,6 +1482,7 @@ async function UpdateControl(_art) {
 }
 
 async function play(options = null) {
+  loadPlayerPreferences();
   autoplayCountdown.cancel();
   stopAfterCurrent.value = false;
   const operation = playbackSession.begin();
@@ -1746,6 +1831,7 @@ const dynamicInputCreateByUrl = () => {
 }
 
 async function getInstance(_art) {
+  const gestureOwner = preferenceHandle;
   autoplayCountdown.cancel();
   autoplayPanel = null;
   autoplayText = null;
@@ -1758,8 +1844,11 @@ async function getInstance(_art) {
   mountPlayerHeading(_art);
   disposePlaybackNotices = installPlaybackNoticeFilter(_art);
   await artF(_art);
+  if (!gestureOwner.isCurrent() || art !== _art) return;
   disposeMobileDanmaku = installMobileDanmaku(_art);
-  disposeMobileGestures = installMobileGestures(_art);
+  disposeMobileGestures = installMobileGestures(_art, window, document, {getPreferences: () => ({
+    enabled: gestureOwner.isCurrent() && gesturesEnabled.value, holdRate: gestureHoldRate.value,
+  })});
   disposeDesktopIdle = installDesktopIdle(_art);
   art = _art;
   recoveryTarget.value = _art.template.$player;
@@ -1794,11 +1883,11 @@ watch(() => accountState.revision, () => {
   // Never reuse a handle after an account transition, even A -> B -> A.
   preferenceHandle = playerPreferences.bindAccount(accountState.account);
   preferenceWarningShown = false;
-  preferredAudioLanguage.value = preferenceHandle.read('audioLanguage');
-  autoPlayNext.value = preferenceHandle.read('autoPlayNext');
-  useAssSubtitles.value = preferenceHandle.read('assSubtitles');
-  subtitleFontSize.value = preferenceHandle.read('subtitleFontSize');
-  use_302_play.value = preferenceHandle.read('use302');
+  preferenceResetGeneration++;
+  showPreferenceReset.value = false;
+  preferenceResetOwner = null;
+  disposeMobileGestures();
+  loadPlayerPreferences();
   if (!playerMounted) return;
   initializationGeneration++;
   playbackSession.cancel();
@@ -1941,6 +2030,13 @@ onBeforeUnmount(() => {
       @retry="recoverPlayback()" @lower="recoverPlayback('lower')" @external="recoverPlayback('external')" @back="backFromPlayer" />
   </Teleport>
 
+  <n-modal v-model:show="showPreferenceReset" :to="preferenceResetTarget || undefined" preset="dialog" title="恢复本账号播放偏好"
+    positive-text="恢复默认" negative-text="取消" :mask-closable="!preferenceResetBusy"
+    :positive-button-props="{loading: preferenceResetBusy}" :negative-button-props="{disabled: preferenceResetBusy}"
+    style="width: min(440px, calc(100vw - 32px))" @positive-click="confirmPlayerPreferenceReset">
+    <p>仅重置当前账号在此浏览器保存的音轨语言、自动连播、ASS 样式、字号、倍速、302、触摸手势和长按倍率。</p>
+    <p>倍速、字号、连播和手势立即恢复；音轨、ASS 样式和 302 在重新打开影片或切集时生效。当前播放不重开，观看进度、搜索历史和其他账号设置不变。</p>
+  </n-modal>
   <n-modal v-model:show="showDanmakuSearch" title="搜索与选择弹幕" preset="card"
            :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">
     <n-space vertical :size="16">

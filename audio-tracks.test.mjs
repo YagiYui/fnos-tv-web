@@ -31,6 +31,7 @@ const calls = [], messages = [];
 const audioPreferencesStore = createPlayerPreferenceStore(() => storage);
 const state = vm.createContext({Math, audioLabel, writePlayerPreference, primaryMediaFile,
   preferenceHandle: audioPreferencesStore.bindAccount('one'),
+  preferenceResetGeneration: 0,
   savePlayerPreference: (name, value, handle) => handle.write(name, value),
   playbackSession: new PlaybackSession(), localStorage: storage,
   preferredAudioLanguage: {value: ''}, currentAudio: {value: tracks[0]},
@@ -68,4 +69,12 @@ audioPreferencesStore.bindAccount('two');
 state.preferenceHandle = audioPreferencesStore.bindAccount('one');
 finishSwitch(); await lateAudio;
 assert.equal(data.get('fnosPlayer:one:audioLanguage'), '"zho"');
+state.currentAudio.value = tracks[1]; finishSwitch = null;
+const resetDuringAudio = state.switchAudio({guid:'en'});
+while (!finishSwitch) await Promise.resolve();
+state.preferenceResetGeneration++;
+data.delete('fnosPlayer:one:audioLanguage'); state.preferredAudioLanguage.value = '';
+finishSwitch(); await resetDuringAudio;
+assert.equal(data.has('fnosPlayer:one:audioLanguage'), false, 'A pending track change cannot undo a confirmed reset');
+assert.equal(state.preferredAudioLanguage.value, '');
 console.log('PASS: audio language/default/no-audio, account-scoped preferences and cancelable autoplay countdown');
