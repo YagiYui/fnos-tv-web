@@ -4,6 +4,7 @@ import VisibleSection from '../components/VisibleSection.vue';
 import MediaImage from '../components/MediaImage.vue';
 import WatchlistCollection from '../components/WatchlistCollection.vue';
 import HomeSettings from '../components/HomeSettings.vue';
+import HomeSearch from '../components/HomeSearch.vue';
 import {useHomePreferences,orderedLibraries} from '../home-preferences.js';
 import {continuePlaybackRoute} from './Play/player-presentation.js';
 import {continueCards,watchingProgress,resolveContinueNext} from '../continue-watching.js';
@@ -210,12 +211,10 @@ onUnmounted(() => {
   <div class="content cinema-home" :class="{'home-compact':homePreferences.values.density==='compact'}">
     <div class="library-toolbar">
       <div><h1>首页</h1><p class="page-description">继续观看与媒体库</p></div>
-      <n-input v-model:value="keyword" class="catalog-search" clearable placeholder="搜索全库，回车提交" aria-label="搜索全库" @keydown.enter="submitSearch" @clear="clearSearch">
-        <template #prefix><i class="bx bx-search"></i></template>
-        <template #suffix><n-button text :disabled="!keyword.trim()" aria-label="提交全库搜索" @click="submitSearch"><i class="bx bx-right-arrow-alt"></i></n-button></template>
-      </n-input>
       <n-button @click="showHomeSettings=true">首页设置</n-button>
     </div>
+    <HomeSearch v-model="keyword" :history="homePreferences.values.showHistory ? search.history : []"
+                @submit="submitSearch" @clear="clearSearch" @choose="searchHistory" @clear-history="mediaSearch.clearHistory()" />
     <section v-if="search.query" class="search-results" aria-label="搜索结果" :aria-busy="search.status === 'loading'">
       <p v-if="search.stale && search.items.length" class="page-description" role="status">正在重新验证状态，暂显示上次搜索结果。</p>
       <div class="section-heading"><h2>“{{ search.query }}” 的搜索结果</h2><n-button text @click="clearSearch">返回首页</n-button></div>
@@ -239,9 +238,6 @@ onUnmounted(() => {
       <div v-if="hasMoreSearchResults" class="catalog-pagination"><n-button secondary @click="mediaSearch.showMore()">显示更多结果</n-button></div>
     </section>
     <template v-else>
-    <div v-if="homePreferences.values.showHistory && search.history.length" class="search-history" aria-label="搜索历史">
-      <span>搜索历史</span><n-button v-for="value in search.history" :key="value" text @click="searchHistory(value)">{{ value }}</n-button><n-button text @click="mediaSearch.clearHistory()">清空历史</n-button>
-    </div>
     <nav class="library-shortcuts" aria-label="媒体库">
       <router-link v-for="item in visibleLibraries" :key="item.guid" :to="libraryRoute(item)" class="library-shortcut">
         <i class="bx" :class="item.category === 'Movie' ? 'bx-film' : 'bx-tv'"></i><span>{{ item.title }}</span><i class="bx bx-chevron-right"></i>
