@@ -18,7 +18,7 @@ const instance = getCurrentInstance();
 const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
 const browseSnapshots = useBrowseSnapshots();
-let viewAccount = browseSnapshots.account || COMMON.userKey;
+let viewAccount = browseSnapshots.account ?? COMMON.userKey;
 let viewRevision = browseSnapshots.revision;
 let savedHome = browseSnapshots.get(viewAccount, 'home');
 let playController = null;
@@ -162,7 +162,7 @@ async function GetPlayList() {
 }
 watch(() => browseSnapshots.revision, () => {
   cancelPlayList();
-  viewAccount = browseSnapshots.account || COMMON.userKey || '';
+  viewAccount = browseSnapshots.account ?? COMMON.userKey ?? '';
   viewRevision = browseSnapshots.revision;
   savedHome = browseSnapshots.get(viewAccount, 'home');
   playList.value = savedHome?.playList || null;

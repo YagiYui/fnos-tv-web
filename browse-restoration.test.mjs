@@ -80,6 +80,9 @@ view=mountHome();const beforeLogin=calls.length;await view.mounted();assert.equa
 COMMON.userKey='first-login';snapshots.setAccount('first-login');store.account='first-login';store.revision=snapshots.revision;
 assert.equal(calls.length,beforeLogin+1);finish([{guid:'first-login-record'}]);await new Promise(setImmediate);
 assert.equal(view.home.playList.value[0].guid,'first-login-record','Account readiness updates the already mounted Home');
+const beforeLogout=calls.length;snapshots.setAccount('');store.account='';store.revision=snapshots.revision;
+assert.equal(calls.length,beforeLogout,'Explicitly cleared account cannot fall back to the old COMMON identity');
+assert.equal(view.home.playList.value,null);
 view.unmount();snapshots.setAccount('other');
 for (let index = 0; index < 3; index++) snapshots.save('other', 'detail-' + index, {info: {guid: index}});
 assert.equal(snapshots.entries.size, 2); assert.equal(snapshots.get('viewer', 'detail-2'), null);
