@@ -1,5 +1,5 @@
 export const EXTERNAL_PLAYER_IDS = Object.freeze(['iina', 'potplayer', 'nplayer', 'infuse', 'vlc', 'mxplayer', 'mxplayer-pro']);
-const playerNames = {iina: 'IINA', potplayer: 'PotPlayer 播放列表', nplayer: 'nPlayer', infuse: 'Infuse',
+const playerNames = {iina: 'IINA', potplayer: 'PotPlayer', nplayer: 'nPlayer', infuse: 'Infuse',
   vlc: 'VLC', mxplayer: 'MX Player', 'mxplayer-pro': 'MX Player Pro'};
 export function externalPlayerChoices(userAgent = '', maxTouchPoints = 0) {
   const ids = /Windows/i.test(userAgent) ? ['potplayer', 'vlc']
@@ -17,7 +17,12 @@ export function externalPlayerLink(player, media, userAgent = '') {
   const intent = packageName => `intent://${value.slice(url.protocol.length + 2)}#Intent;scheme=${url.protocol.slice(0, -1)};action=android.intent.action.VIEW;type=video/*;package=${packageName};end`;
   switch (player) {
     case 'iina': return 'iina://weblink/?url=' + encodeURIComponent(value);
-    case 'potplayer': throw new Error('请下载播放列表，或复制 HTTP 地址在 PotPlayer 中打开');
+    case 'potplayer': {
+      const link = 'potplayer://' + value;
+      // Modern URL parsers drop the inner protocol's colon as an empty port.
+      // Stock PotPlayer does not accept the opaque/percent-encoded alternatives.
+      return new URL(link).href === link ? link : '';
+    }
     case 'nplayer': return 'nplayer-' + value;
     case 'infuse': return 'infuse://x-callback-url/play?url=' + encodeURIComponent(value);
     case 'vlc': return /Android/i.test(userAgent) ? intent('org.videolan.vlc') : 'vlc://' + value;

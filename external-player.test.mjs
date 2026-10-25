@@ -4,7 +4,12 @@ import vm from 'node:vm';
 import {externalPlayerLink,externalPlaylist} from './src/views/Play/external-player.js';
 const media='http://nas:18005/danmu/external-play/fixture/preset.m3u8?x=1&y=2';
 assert.equal(externalPlayerLink('nplayer',media),'nplayer-'+media);
-assert.throws(()=>externalPlayerLink('potplayer',media));
+for (const value of [media, 'https://example.test:10998/danmu/external-play/fixture/%E7%A4%BA%E4%BE%8B%20S04E01.mkv?x=1&y=2']) {
+  const legacy = 'potplayer://' + value;
+  assert.notEqual(new URL(legacy).href, legacy, 'Reproduce the missing inner colon in the effective URL');
+  assert.equal(externalPlayerLink('potplayer', value), '', 'Never expose a launch link that corrupts the HTTP(S) URL');
+  assert.ok(externalPlaylist(value).endsWith(new URL(value).href+'\n'), 'M3U fallback preserves protocol, port, encoded filename and query');
+}
 const playlist=externalPlaylist(media,'Movie\n#EXT-X-KEY:bad');
 assert.equal(playlist.split('\n').filter(line=>line.startsWith('http')).length,1);
 assert.ok(playlist.endsWith(media+'\n'));
