@@ -51,11 +51,18 @@ assert.equal(imageLoading(original), 'eager', 'Retry success warms the original 
 assert.equal(timers.size, 0); view.stop();
 
 view = mount('/fnos/v/api/v1/sys/img/missing.webp');
-for (const delay of [500, 1500, 3000]) {
+for (const delay of [500, 1500, 3000, 8000, 15000]) {
   image = view.image(); image.props.onError({target: image}); await tick(delay);
 }
 image = view.image(); image.props.onError({target: image});
-assert.equal(timers.size, 0, 'Permanent errors stop after three retries'); view.stop();
+assert.equal(timers.size, 0, 'Permanent errors stop after five retries');
+assert.equal(image.props.role, 'button');
+let prevented = false;
+image.props.onClick({type: 'click', preventDefault: () => { prevented = true; }, stopPropagation() {}}); await Vue.nextTick();
+assert.ok(prevented, 'Retry does not open the movie detail');
+assert.ok(view.image().props.src.endsWith('__fnos_image_retry=6'), 'Manual retry gets a fresh URL after automatic retries exhaust');
+view.image().props.onError({target: view.image()}); await tick(500);
+view.stop();
 
 view = mount('/fnos/v/api/v1/sys/img/old.webp'); image = view.image();
 image.props.onError({target: image});

@@ -66,6 +66,14 @@ let viewAccount = null;
 const resultsMatch = computed(() => resultKey.value === queryKey() && viewMediaRevision.value === mediaChanges.value);
 const hasNextPage = computed(() => total.value !== null ? page.value * size.value < total.value : MediaDbInfo.value.length === size.value);
 const totalPages = computed(() => total.value !== null ? Math.max(1, Math.ceil(total.value / size.value)) : null);
+const pageSelection = ref(1);
+watch(page, value => { pageSelection.value = value; });
+const visibleRange = computed(() => MediaDbInfo.value.length ? `${(page.value - 1) * size.value + 1}–${(page.value - 1) * size.value + MediaDbInfo.value.length}` : '0');
+function selectPage(value) {
+  if (listLoading.value || !resultsMatch.value || !Number.isInteger(value) || value < 1 || (totalPages.value && value > totalPages.value) || value === page.value) return;
+  void GetMediaDbInfos(value);
+}
+function retryPosters() { window.dispatchEvent(new Event('fnos-retry-images')); }
 
 
 const instance = getCurrentInstance();
@@ -263,6 +271,7 @@ onMounted(async () => { await loadLibrary(libraryViewKey(proxy.$route)); });
     <div class="library-toolbar list-toolbar">
       <div><h1>{{ libraryTitle }}</h1><p class="page-description"><span v-if="total !== null">{{ total }} 部影片 · </span>第 {{ page }} 页<span v-if="totalPages"> / 共 {{ totalPages }} 页</span><span v-if="listLoading"> · 加载中</span></p></div>
       <div class="catalog-actions">
+        <n-button @click="retryPosters" quaternary title="仅重试未加载成功的封面" aria-label="重试未加载封面"><i class="bx bx-image" /></n-button>
         <n-button @click="openSort" secondary><template #icon><i class="bx bx-sort-alt-2"></i></template>筛选与排序<span v-if="filterCount">（{{ filterCount }}）</span></n-button>
         <n-button @click="BackPage()" :disabled="listLoading || !resultsMatch || page <= 1" aria-label="上一页" title="上一页" secondary circle><i class="bx bx-chevron-left"></i></n-button>
         <n-button @click="NextPage()" :disabled="listLoading || !resultsMatch || !hasNextPage" aria-label="下一页" title="下一页" secondary circle><i class="bx bx-chevron-right"></i></n-button>
@@ -287,7 +296,12 @@ onMounted(async () => { await loadLibrary(libraryViewKey(proxy.$route)); });
       </div>
     </div>
     <n-empty v-if="!listLoading && !listError && !MediaDbInfo.length" :description="filterCount ? '没有符合当前筛选条件的影片' : isFavorites ? '暂无收藏影片' : '当前媒体库暂无影片'" class="catalog-empty" />
-    <nav class="catalog-pagination" aria-label="列表翻页"><n-button @click="BackPage()" :disabled="listLoading || !resultsMatch || page <= 1" secondary>上一页</n-button><span>第 {{ page }} 页<span v-if="totalPages"> / {{ totalPages }}</span></span><n-button @click="NextPage()" :disabled="listLoading || !resultsMatch || !hasNextPage" secondary>下一页</n-button></nav>
+    <nav class="catalog-pagination catalog-pagination-expanded" aria-label="列表翻页">
+      <p class="catalog-result-count">显示 {{ visibleRange }} 部<span v-if="total !== null">，共 {{ total }} 部</span> · 每页 {{ size }} 部</p>
+      <n-pagination v-if="totalPages" :page="page" :page-count="totalPages" :page-slot="5" :disabled="listLoading || !resultsMatch" @update:page="selectPage" />
+      <div v-else class="catalog-page-step"><n-button @click="BackPage()" :disabled="listLoading || !resultsMatch || page <= 1" secondary>上一页</n-button><span>第 {{ page }} 页 · 总页数未知</span><n-button @click="NextPage()" :disabled="listLoading || !resultsMatch || !hasNextPage" secondary>下一页</n-button></div>
+      <form v-if="totalPages && totalPages > 1" class="catalog-page-jump" @submit.prevent="selectPage(pageSelection)"><label for="catalog-page-number">跳至</label><n-input-number :input-props="{id: 'catalog-page-number', 'aria-label': '目标页码', inputmode: 'numeric'}" v-model:value="pageSelection" :min="1" :max="totalPages" :precision="0" :show-button="false" :disabled="listLoading || !resultsMatch" aria-label="目标页码" /><span>/ {{ totalPages }} 页</span><n-button attr-type="submit" :disabled="listLoading || !resultsMatch">前往</n-button></form>
+    </nav>
     <n-modal :show="showSort" @update:show="value => { if (!value) closeSort(); }" transform-origin="center">
       <n-card class="catalog-filter-card" title="筛选与排序" :bordered="false" size="large" role="dialog" aria-modal="true" aria-label="筛选与排序">
         <template #header-extra><n-button @click="closeSort" quaternary circle aria-label="关闭筛选与排序"><i class="bx bx-x"></i></n-button></template>
@@ -309,6 +323,7 @@ onMounted(async () => { await loadLibrary(libraryViewKey(proxy.$route)); });
 </template>
 
 <style scoped>
+.catalog-pagination-expanded{flex-wrap:wrap;gap:14px 22px}.catalog-result-count{width:100%;text-align:center;margin:0}.catalog-page-jump,.catalog-page-step{display:flex;align-items:center;gap:10px}.catalog-page-jump .n-input-number{width:66px}.catalog-pagination-expanded :deep(.n-pagination-item){min-width:34px;height:34px;border-radius:7px}
 .catalog-filter-card{width:min(600px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow-y:auto}
 .catalog-filter-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 18px;padding:12px 0}
 .catalog-filter-form label{display:block;font-size:13px;margin-bottom:8px;color:var(--cinema-muted)}
