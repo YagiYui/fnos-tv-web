@@ -5,6 +5,7 @@ import MediaImage from '../components/MediaImage.vue';
 import WatchlistCollection from '../components/WatchlistCollection.vue';
 import HomeSettings from '../components/HomeSettings.vue';
 import HomeSearch from '../components/HomeSearch.vue';
+import {posterUrl} from '../image-requests.js';
 import {useHomePreferences,orderedLibraries} from '../home-preferences.js';
 import {continuePlaybackRoute} from './Play/player-presentation.js';
 import {continueCards,watchingProgress,resolveContinueNext} from '../continue-watching.js';
@@ -271,7 +272,7 @@ onUnmounted(() => {
           <template #default="{item}">
           <div class="view-item poster-card">
             <router-link :to="{path: '/video', query: {guid: item.guid, gallery_type: item.type}}">
-              <div class="poster-art"><MediaImage :src="item.poster ? COMMON.imgUrl + '/92/17/' + item.poster + '?w=300' : '/images/not_video.jpg'" :alt="item.title || item.name" loading="lazy" /><span class="poster-play"><i class="bx bx-play"></i></span><span v-if="item.vote_average > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="item.played" class="poster-watched"><i class="bx bx-check"></i></span></div>
+              <div class="poster-art"><MediaImage :src="posterUrl(COMMON.imgUrl, item.poster)" :alt="item.title || item.name" loading="lazy" /><span class="poster-play"><i class="bx bx-play"></i></span><span v-if="item.vote_average > 0" class="poster-rating">{{ Number(item.vote_average).toFixed(1) }}</span><span v-if="item.played" class="poster-watched"><i class="bx bx-check"></i></span></div>
               <div class="view-item-title">{{ item.title || item.name }}</div><div class="poster-caption" v-if="item.release_date">{{ String(item.release_date).slice(0, 4) }}</div>
             </router-link>
           </div>
