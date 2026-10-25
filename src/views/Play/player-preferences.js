@@ -51,6 +51,17 @@ export function createPlayerPreferenceStore(getStorage = () => window.localStora
       return Object.freeze({
         isCurrent: active,
         read,
+        saved() {
+          const values = {};
+          if (!active()) return values;
+          for (const name of Object.keys(PLAYER_PREFERENCE_DEFAULTS)) {
+            try {
+              const value = overrides.has(name) ? overrides.get(name) : JSON.parse(getStorage().getItem(key(name)));
+              if (validators[name](value)) values[name] = value;
+            } catch { /* Do not invent ownership for missing/global settings. */ }
+          }
+          return values;
+        },
         write(name, value) {
           validateName(name);
           if (!active() || !validators[name](value)) return {accepted: false, persisted: false};

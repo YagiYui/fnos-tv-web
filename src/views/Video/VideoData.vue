@@ -4,6 +4,7 @@ import {onBeforeRouteUpdate, onBeforeRouteLeave} from 'vue-router';
 import {useBrowseSnapshots} from '../../store.js';
 import MediaImage from '../../components/MediaImage.vue';
 import PageBack from '../../components/PageBack.vue';
+import WatchlistButton from '../../components/WatchlistButton.vue';
 import {mediaDetailTitle} from '../Play/player-presentation.js';
 import {mediaFlag, seasonTargets} from '../../media-actions.js';
 
@@ -207,6 +208,7 @@ onMounted(() => loadDetail(initialScroll));
             <button type="button" class="primary-play" @click="Play()" :disabled="!playInfo"><i class="bx bx-play"></i><span>{{ playInfo?.item?.watched_ts > 0 ? '继续观看' : '播放' }}</span><small v-if="gallery_type !== 'Movie' && playInfo?.item?.episode_number">第 {{ playInfo.item.episode_number }} 集</small></button>
             <div class="media-state-actions">
               <n-button v-if="['Movie', 'TV'].includes(gallery_type)" :disabled="Boolean(actionBusy) || !detailsReady || favoriteState === null" :aria-pressed="favoriteState === true" @click="setFlag(guid, 'favorite', !favoriteState)"><template #icon><i class="bx" :class="favoriteState ? 'bxs-star' : 'bx-star'"></i></template>{{ favoriteState ? '取消收藏' : '收藏' }}</n-button>
+              <WatchlistButton v-if="detailsReady && ['Movie','TV'].includes(gallery_type)" :guid="guid" />
               <template v-if="gallery_type === 'Movie'"><span class="media-state-label">{{ watchedState === null ? '观看状态未获取' : watchedState ? '已看' : '未看' }}</span><n-button :disabled="Boolean(actionBusy) || !detailsReady || watchedState === true" @click="setFlag(guid, 'watched', true)">标为已看</n-button><n-button :disabled="Boolean(actionBusy) || !detailsReady || watchedState === false" @click="setFlag(guid, 'watched', false)">标为未看</n-button></template>
             </div>
             <p class="detail-overview" :class="{'is-expanded': expandedOverview}">{{ VideoDataInfo.overview || '暂无简介' }}</p><button v-if="VideoDataInfo.overview?.length > 150" type="button" class="text-action" @click="expandedOverview = !expandedOverview">{{ expandedOverview ? '收起简介' : '展开简介' }}</button>

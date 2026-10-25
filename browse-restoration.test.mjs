@@ -1,3 +1,5 @@
+import {HOME_DEFAULTS,orderedLibraries} from './src/home-preferences.js';
+import {continueCards,watchingProgress,resolveContinueNext} from './src/continue-watching.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -49,7 +51,7 @@ function mountHome() {
   let mounted, leave, unmounted;
   const errors = [], scope = Vue.effectScope();
   const context = vm.createContext({...Vue, AbortController, continuePlaybackRoute,
-    useBrowseSnapshots: () => store,
+    continueCards,watchingProgress,resolveContinueNext,orderedLibraries,useHomePreferences:()=>({values:structuredClone(HOME_DEFAULTS)}),useBrowseSnapshots: () => store,
     inject: (key, fallback) => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : fallback,
     useMediaSearch: () => ({state: {query: '', scrollY: 0}, cancel() {}}), useMediaDbData: () => ({list: []}),
     getCurrentInstance: () => ({appContext: {config: {globalProperties: {$COMMON: COMMON}}}}),
