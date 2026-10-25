@@ -6,6 +6,8 @@ import Snackbar from 'node-snackbar';
 import router from "@/router/index.js";
 import {errorText} from '../compat.js';
 
+axios.defaults.timeout = 45000;
+
 // 定义一些公共的属性和方法
 let title = 'FNOS';
 let fnHost = "/fnos";
@@ -58,6 +60,7 @@ LoginInstance.interceptors.request.use(
         } else {
           router.push('/login')
         }
+        throw new Error('请先登录');
       }
       config.headers.Authorization = authorization;
       config = instanceRequestBase(config);
@@ -70,7 +73,7 @@ LoginInstance.interceptors.response.use(
       let code = response.data.code
       if (code === -2) {
         router.push('/login')
-        return
+        return Promise.reject(new Error('登录已失效，请重新登录'));
       }
       if (code === 0) {
         return response.data.data;
@@ -79,7 +82,7 @@ LoginInstance.interceptors.response.use(
     },
     error => {
       if (axios.isCancel(error) || error.name === 'CanceledError') {
-        return; // 不报错，静默处理
+        return Promise.reject(error);
       }
       return Promise.reject(error);
     }
@@ -103,23 +106,24 @@ NoLoginInstance.interceptors.response.use(
     },
     error => {
       if (axios.isCancel(error) || error.name === 'CanceledError') {
-        return; // 不报错，静默处理
+        return Promise.reject(error);
       }
       return Promise.reject(error);
     }
 )
 
-async function requests(method, uri, isLogin = false, data = {}) {
+async function requests(method, uri, isLogin = false, data = {}, options = {}) {
   let instance = LoginInstance;
   if (!isLogin) {
     instance = NoLoginInstance;
   }
   if (method === "POST") {
-    return await instance.post(uri, data)
+    return await instance.post(uri, data, options)
   } else if (method === "PUT") {
-    return await instance.put(uri, data)
+    return await instance.put(uri, data, options)
   }else if (method === "DELETE") {
     return await instance.delete(uri, {
+      ...options,
       data: data
     })
   } else {
@@ -128,7 +132,7 @@ async function requests(method, uri, isLogin = false, data = {}) {
       params = Object.fromEntries(new URLSearchParams(uri.split("?")[1]).entries());
       uri = uri.split('?')[0]
     }
-    return await instance.get(uri, {params: params})
+    return await instance.get(uri, {...options, params: params})
   }
 
 }

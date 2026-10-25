@@ -12,7 +12,11 @@ import axios from "axios";
 import {createBlobVTTUrl, SegmentedSubtitleLoader, subtitleOptions, bindSubtitleTrack, subtitleSearchResults, downloadSubtitle, isPgsSubtitle, streamSubtitleGuid} from "./subtitle.js"
 import {episodeDanmaku, errorText} from '../../compat.js';
 import {SubtitleOverlay, waitForAssSubtitle} from './ass-renderer.js';
-import {playbackTitle, playbackSelection} from './player-presentation.js';
+import {playbackTitle, playbackSelection, nextEpisode} from './player-presentation.js';
+import {renderDanmaku} from './danmaku-renderer.js';
+import {PlaybackSession, createProgressReporter} from './playback-session.js';
+import {chooseAudio, audioLabel, readPlayerPreference, writePlayerPreference, createAutoplayCountdown} from './audio-tracks.js';
+const playbackSession = new PlaybackSession();
 import {installMobileFullscreen} from './mobile-fullscreen.js';
 import {installMobileDanmaku} from './mobile-danmaku.js';
 import {backIcon, fullscreenIcon, fullscreenExitIcon} from './player-icons.js';
@@ -31,6 +35,27 @@ const instance = getCurrentInstance();
 const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
 const device = proxy.$device;
+const currentAudio = ref(null);
+const preferredAudioLanguage = ref(readPlayerPreference(localStorage, COMMON.userKey, 'audioLanguage', ''));
+const autoPlayNext = ref(readPlayerPreference(localStorage, COMMON.userKey, 'autoPlayNext', true));
+const stopAfterCurrent = ref(false);
+let autoplayPanel = null, autoplayText = null;
+const autoplayCountdown = createAutoplayCountdown(remaining => {
+  if (!art) return;
+  if (remaining === null) { if (autoplayPanel) autoplayPanel.hidden = true; return; }
+  if (!autoplayPanel) {
+    autoplayPanel = document.createElement('div');
+    autoplayPanel.className = 'fnos-autoplay-countdown';
+    autoplayPanel.style.cssText = 'position:absolute;bottom:72px;right:16px;padding:12px;background:#111d;color:white;border-radius:8px;pointer-events:auto';
+    autoplayText = document.createElement('span');
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消下一集';
+    cancel.addEventListener('click', event => {event.stopPropagation();autoplayCountdown.cancel();});
+    autoplayPanel.append(autoplayText, cancel);
+    art.layers.add({name: 'autoplay-countdown', html: autoplayPanel});
+  }
+  autoplayPanel.hidden = false;
+  autoplayText.textContent = `${remaining} 秒后播放下一集 `;
+}, () => play_next());
 
 let art = null;
 const guid = ref(null);
@@ -609,7 +634,7 @@ async function loadDanmuku() {
 }
 
 // 获取清晰度
-async function GetQuality() {
+async function GetQuality(operation = null) {
   let api = "/api/v1/play/quality"
   let regex = /\d+-\d+-\S+/;
   let local = StreamList.value.files.find(o => !regex.test(o.path))
@@ -619,7 +644,9 @@ async function GetQuality() {
   let _data = {
     "media_guid": local.guid
   }
-  let res = await COMMON.requests("POST", api, true, _data);
+  let res = await COMMON.requests("POST", api, true, _data, {signal: operation?.signal});
+  operation?.assertCurrent();
+  if (!Array.isArray(res) || !res.length) throw new Error('当前影片没有可用画质');
   QualityData.value = res;
 
   // 按分辨率分组，每个分辨率下按码率排序
@@ -716,31 +743,38 @@ async function switchQuality(item, $dom, event) {
   }
 }
 
-async function GetEpisodeList() {
+async function GetEpisodeList(generation = null) {
   let api = "/api/v1/episode/list/" + guid.value;
-  EpisodeList.value = await COMMON.requests("GET", api, true)
+  const episodes = await COMMON.requests("GET", api, true);
+  if (generation !== null && generation !== initializationGeneration) return;
+  EpisodeList.value = episodes;
 }
 
 // 获取播放信息
-async function GetPayInfo(_guid) {
+async function GetPayInfo(_guid, operation = null) {
   let api = "/api/v1/play/info";
   let _data = {
     "item_guid": _guid
   }
-  let res = await COMMON.requests("POST", api, true, _data)
+  let res = await COMMON.requests("POST", api, true, _data, {signal: operation?.signal})
+  operation?.assertCurrent();
   return res;
 }
 
-async function GetStreamList() {
+async function GetStreamList(operation = null) {
   let api = "/api/v1/stream/list/" + episode_guid.value + '?before_play=1';
-  StreamList.value = await COMMON.requests("GET", api, true)
+  const streams = await COMMON.requests("GET", api, true, {}, {signal: operation?.signal});
+  operation?.assertCurrent();
+  if (!streams?.files?.length || !streams?.video_streams?.length) throw new Error('当前影片没有可用视频流');
+  StreamList.value = streams;
+  currentAudio.value = chooseAudio(streams.audio_streams, playInfo.value.audio_guid, preferredAudioLanguage.value);
 }
 
 async function GetChannels(s) {
   return s < 6 ? 2 : device.mediaCanPlay.audioChannels >= 6 ? 6 : 2
 }
 
-async function GetPalyUrlBy302() {
+async function GetPalyUrlBy302(operation = null) {
   let regex = /\d+-\d+-\S+/;
   // 获取远程挂载的视频信息
   let remote = StreamList.value.files.find(o => regex.test(o.path))
@@ -749,9 +783,11 @@ async function GetPalyUrlBy302() {
       path: remote.path
     }
     let res = await axios.get("/api/play", {
+      signal: operation?.signal,
       params: _data,
       headers: {Authorization: VueCookies.get("authorization")}
     })
+    operation?.assertCurrent();
     if (res.data.code === 0) {
       url.value = res.data.data;
       playUrl.value = res.data.data
@@ -759,12 +795,13 @@ async function GetPalyUrlBy302() {
   }
 }
 
-async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts) {
+async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation = null, audioOverride = currentAudio.value) {
   if (art !== null && art !== undefined) {
     art.loading.show = true;
   }
   let api = "/api/v1/play/play"
-  let _channels = (StreamList.value.audio_streams.length !== 1 && StreamList.value.audio_streams.find(o => o.codec_name === "aac") !== undefined ? StreamList.value.audio_streams.find(o => o.codec_name === "aac") : StreamList.value.audio_streams[0]).channels;
+  const audio = audioOverride;
+  const _channels = audio?.channels || 2;
   let regex = /\d+-\d+-\S+/;
   let local = StreamList.value.files.find(o => !regex.test(o.path))
   if (local === null || local === undefined) {
@@ -776,34 +813,34 @@ async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts) {
     "video_encoder": StreamList.value.video_streams[0].codec_name,
     "resolution": QualityData.value[0].resolution,
     "bitrate": StreamList.value.video_streams[0].bps,
-    "startTimestamp": startTimestamp,
+    "startTimestamp": Math.max(0, Math.floor(Number(startTimestamp) || 0)),
     "audio_encoder": "aac",
-    "audio_guid": StreamList.value.audio_streams[0].guid,
+    "audio_guid": audio?.guid || '',
     "subtitle_guid": streamSubtitleGuid(currentSubtitle.value),
     "channels": await GetChannels(_channels)
   };
-  let res = await COMMON.requests("POST", api, true, _data)
-  if (res !== null) {
+  let res = await COMMON.requests("POST", api, true, _data, {signal: operation?.signal})
+  operation?.assertCurrent();
+  if (typeof res?.play_link === 'string' && res.play_link) {
     serverSubtitleGuid = _data.subtitle_guid;
     urlBase.value = res.play_link;
     url.value = COMMON.fnHost + res.play_link;
     playUrl.value = window.location.origin + url.value
     if (use_302_play.value) {
-      await GetPalyUrlBy302();
+      await GetPalyUrlBy302(operation);
     }
   } else {
-    COMMON.ShowMsg("播放链接获取失败，请切换清晰度或尝试其他操作")
+    throw new Error('播放链接获取失败，请切换清晰度或重试');
   }
 }
 
-async function SendPlayRecord() {
-  if (art.currentTime >= 5) {
-    let api = "/api/v1/play/record"
-    let data = {
-      "item_guid": episode_guid.value,
+function playbackRecordSnapshot() {
+  if (art && art.currentTime >= 5 && StreamList.value?.video_streams?.length && QualityData.value?.length) {
+    return {
+      "item_guid": playInfo.value?.guid || episode_guid.value,
       "media_guid": StreamList.value.video_streams[0].media_guid,
       "video_guid": StreamList.value.video_streams[0].guid,
-      "audio_guid": StreamList.value.audio_streams[0].guid,
+      "audio_guid": currentAudio.value?.guid || '',
       "subtitle_guid": currentSubtitle.value?.guid || "",
       "resolution": QualityData.value[0].resolution,
       "bitrate": QualityData.value[0].bitrate,
@@ -814,7 +851,51 @@ async function SendPlayRecord() {
       "playback_speed": art.playbackRate,
       "guid": guid.value,
     }
-    await COMMON.requests("POST", api, true, data)
+  }
+  return null;
+}
+async function SendPlayRecord() {
+  return progressReporter.submit();
+}
+const progressReporter = createProgressReporter(playbackRecordSnapshot,
+  data => COMMON.requests('POST', '/api/v1/play/record', true, data),
+  () => { if (art) art.notice.show = '播放进度暂未同步，将在下次上报时重试'; });
+
+async function switchAudio(item) {
+  const selected = StreamList.value?.audio_streams?.find(track => track.guid === item.guid);
+  if (!selected || selected.guid === currentAudio.value?.guid) return audioLabel(currentAudio.value);
+  const previous = currentAudio.value;
+  const previousLink = urlBase.value;
+  const previousUrl = url.value;
+  const previousPublicUrl = playUrl.value;
+  const position = Math.max(0, Math.floor(art.currentTime));
+  const paused = art.video.paused;
+  const operation = playbackSession.begin();
+  try {
+    await GetPalyUrl(position, operation, selected);
+    operation.assertCurrent();
+    currentAudio.value = selected;
+    playInfo.value.watched_ts = position;
+    await art.switchUrl(url.value);
+    if (paused) art.pause();
+    if (selected.language) {
+      preferredAudioLanguage.value = selected.language;
+      writePlayerPreference(localStorage, COMMON.userKey, 'audioLanguage', selected.language);
+    }
+    if (previousLink && previousLink !== urlBase.value) void mediaP('media.quit', previousLink).catch(() => {});
+    return audioLabel(selected);
+  } catch (error) {
+    if (operation.isCurrent()) {
+      if (urlBase.value && urlBase.value !== previousLink) void mediaP('media.quit', urlBase.value).catch(() => {});
+      currentAudio.value = previous;
+      urlBase.value = previousLink;
+      url.value = previousUrl;
+      playUrl.value = previousPublicUrl;
+      COMMON.ShowMsg('音轨切换失败：' + errorText(error));
+    }
+    return audioLabel(currentAudio.value);
+  } finally {
+    if (operation.isCurrent() && art) art.loading.show = false;
   }
 }
 
@@ -838,13 +919,14 @@ async function mediaP(req, playLink) {
 }
 
 async function GetEmoji() {
+  const episode = episode_guid.value;
   try {
     let api = "/danmu/getEmoji?" + getDanmuparams()
     let res = await fetch(api)
     let res_json = await res.json()
-    emojos.value = res_json
+    if (episode === episode_guid.value) emojos.value = res_json;
   } catch {
-    emojos.value = []
+    if (episode === episode_guid.value) emojos.value = [];
   }
 }
 
@@ -879,22 +961,27 @@ async function putVideoConfig() {
         Authorization: VueCookies.get("authorization")
       },
     })
-    let res_json = await res.data
+    if (res.data?.code !== 0) throw new Error(res.data?.msg || '保存配置失败');
     skipList.value = sendData.list
     seasonConfig.value = sendData
     art.plugins.artplayerPluginDanmuku.load();
     void loadDanmuku()
-  } catch {
+  } catch (error) {
+    COMMON.ShowMsg(errorText(error));
+    return;
   }
   showSetUp.value = false;
 
 }
 
 async function getVideoConfig() {
+  const episode = episode_guid.value, season = guid.value;
   try {
     let api = "/api/videoConfig?episode_guid=" + episode_guid.value + "&guid=" + guid.value
     let res = await axios.get(api, {headers: {Authorization: VueCookies.get("authorization")}})
-    seasonConfig.value = await res.data;
+    if (episode !== episode_guid.value || season !== guid.value) return;
+    if (!Array.isArray(res.data?.list) || !Array.isArray(res.data?.url)) throw new Error('播放配置返回格式异常');
+    seasonConfig.value = res.data;
     skipList.value = seasonConfig.value.list
   } catch (err) {
   }
@@ -1040,7 +1127,8 @@ async function UpdateControl(_art) {
       html: '<img width="22" heigth="22" src="./images/next.svg">',
       tooltip: '下一集',
       style: {
-        color: 'green',
+        opacity: nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value) ? '1' : '0.35',
+        pointerEvents: nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value) ? '' : 'none',
       },
       click: function () {
         play_next()
@@ -1067,8 +1155,11 @@ async function UpdateControl(_art) {
       html: "选集",
       selector: 选集_selector,
       onSelect: async function (item, $dom, event) {
+        void SendPlayRecord();
         episode_guid.value = item.episode_guid;
-        await play();
+        try { await play(); } catch (error) {
+          if (error.name !== 'AbortError' && error.name !== 'CanceledError') COMMON.ShowMsg(errorText(error));
+        }
         return "选集";
       }
     }
@@ -1095,6 +1186,30 @@ async function UpdateControl(_art) {
     range: [subtitleFontSize.value, 12, 60, 1],
     onChange: item => setSubtitleFontSize(item.range[0]),
     onRange: item => setSubtitleFontSize(item.range[0])
+  });
+  const audioTracks = StreamList.value?.audio_streams || [];
+  await addArtConfig(_art, 'setting', {
+    name: '音轨选择', html: '音轨', tooltip: audioLabel(currentAudio.value),
+    selector: audioTracks.length ? audioTracks.map(track => ({guid: track.guid,
+      html: audioLabel(track), default: track.guid === currentAudio.value?.guid})) : [{html: '当前影片无音轨'}],
+    onSelect: switchAudio
+  });
+  await addArtConfig(_art, 'setting', {
+    name: '自动连播', html: '自动连播', switch: autoPlayNext.value,
+    onSwitch: item => {
+      autoPlayNext.value = !item.switch;
+      writePlayerPreference(localStorage, COMMON.userKey, 'autoPlayNext', autoPlayNext.value);
+      if (!autoPlayNext.value) autoplayCountdown.cancel();
+      return autoPlayNext.value;
+    }
+  });
+  await addArtConfig(_art, 'setting', {
+    name: '播完本集停止', html: '播完本集停止', switch: stopAfterCurrent.value,
+    onSwitch: item => {
+      stopAfterCurrent.value = !item.switch;
+      if (stopAfterCurrent.value) autoplayCountdown.cancel();
+      return stopAfterCurrent.value;
+    }
   });
   await addArtConfig(_art, 'setting', {
     name: 'ASS特效字幕', html: 'ASS 特效字幕', tooltip: useAssSubtitles.value ? '原始样式' : '普通字幕',
@@ -1155,6 +1270,10 @@ async function UpdateControl(_art) {
 }
 
 async function play() {
+  autoplayCountdown.cancel();
+  stopAfterCurrent.value = false;
+  const operation = playbackSession.begin();
+  subtitleSwitchGeneration++;
   danmakuLoadGeneration++;
   showDanmakuSearch.value = false;
   danmakuResults.value = [];
@@ -1173,12 +1292,12 @@ async function play() {
   }
   let playLink = urlBase.value;
   if (!episode_guid.value) {
-    let guidPlayInfo = await GetPayInfo(guid.value)
+    let guidPlayInfo = await GetPayInfo(guid.value, operation)
     episode_guid.value = guidPlayInfo.item.guid
   }
-  let _PayInfo = await GetPayInfo(episode_guid.value);
+  let _PayInfo = await GetPayInfo(episode_guid.value, operation);
   playInfo.value = _PayInfo.item;
-  await GetStreamList();
+  await GetStreamList(operation);
 
   subtitleLoader.clear();
   currentSubtitle.value = null;
@@ -1189,22 +1308,37 @@ async function play() {
       || tracks.find(sub => Number(sub.is_default) === 1) || tracks[0];
   }
 
-  await GetQuality();
-  await GetPalyUrl();
+  await GetQuality(operation);
+  await GetPalyUrl(undefined, operation);
+  operation.assertCurrent();
   GetEmoji();
   if (art !== null) {
     await art.switchUrl(url.value);
   }
-  if (playLink !== null) {
-    await mediaP("media.quit", playLink)
+  if (playLink && playLink !== urlBase.value) {
+    void mediaP("media.quit", playLink).catch(() => {});
   }
 }
 
+let nextEpisodeBusy = false;
 async function play_next() {
-  if (!Array.isArray(EpisodeList.value) || gallery_type.value === 'Movie') return;
-  let episode_data = EpisodeList.value.find(o => o.episode_number === (playInfo.value.episode_number + 1))
-  episode_guid.value = episode_data.guid
-  await play()
+  if (nextEpisodeBusy) return;
+  const episode = nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value);
+  if (!episode) return;
+  const previous = episode_guid.value;
+  nextEpisodeBusy = true;
+  try {
+    void SendPlayRecord();
+    episode_guid.value = episode.guid;
+    await play();
+  } catch (error) {
+    if (error.name !== 'AbortError' && error.name !== 'CanceledError') {
+      if (episode_guid.value === episode.guid) episode_guid.value = previous;
+      COMMON.ShowMsg('切换下一集失败：' + errorText(error));
+    }
+  } finally {
+    nextEpisodeBusy = false;
+  }
 }
 
 async function switchSubtitleUrl({plain = false} = {}) {
@@ -1267,6 +1401,7 @@ async function switchSubtitleUrl({plain = false} = {}) {
 
 
 async function ready() {
+  const player = art, episode = episode_guid.value;
   mountPlayerHeading(art);
   if (timerSendPlayRecord.value !== null) {
     clearInterval(timerSendPlayRecord.value)
@@ -1287,6 +1422,7 @@ async function ready() {
   void loadDanmuku()
   await GetSkipList();
   await getVideoConfig();
+  if (player !== art || episode !== episode_guid.value) return;
   // if (!art.plugins.hasOwnProperty("artplayerPluginDanmuku")) {
   //   // 加载自己修改的弹幕js
   //   await import('../../../public/packages//artplayer-plugin-danmuku.js');
@@ -1380,8 +1516,13 @@ const artF = async (data) => {
   });
 
   art.on('video:ended', () => {
-    play_next()
+    void SendPlayRecord();
+    if (autoPlayNext.value && !stopAfterCurrent.value && nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value)) {
+      autoplayCountdown.start();
+    }
   });
+  art.on('video:play', () => autoplayCountdown.cancel());
+  art.on('video:seeking', () => autoplayCountdown.cancel());
   art.on('fullscreen', async (state) => {
     await UpdateControl(art);
   });
@@ -1404,29 +1545,7 @@ const artF = async (data) => {
     art.storage.name = 'artplayer_settings';
   });
   art.on('artplayerPluginDanmuku:visible', (danmu) => {
-    const $ref = danmu.$ref;
-    let text = $ref.textContent;
-    // 正则表达式，用于匹配被中括号括起来的内容
-    const regex = /\[([^\]]+)\]/g;
-    // 用于存储匹配结果的数组
-    let matches = [];
-    // 使用正则表达式的 exec 方法匹配所有符合条件的内容
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-      matches.push(match[1]);
-    }
-
-    // 从对象转换为 Map，提高查找性能
-    const emojosMap = new Map(Object.entries(emojos.value));
-
-    // 一次性替换所有匹配项
-    matches.forEach(match => {
-      const emojo = emojosMap.get(`[${match}]`);
-      if (emojo !== undefined) {
-        text = text.replace(`[${match}]`, `<img v-lazy="${emojo}" style="height: 1em; width: auto; vertical-align: middle;"/>`);
-      }
-    });
-    $ref.innerHTML = text;
+    renderDanmaku(danmu.$ref, emojos.value);
   });
   // art.on('pause', () => {
   //   if_play.value = false;
@@ -1451,6 +1570,9 @@ const dynamicInputCreateByUrl = () => {
 }
 
 async function getInstance(_art) {
+  autoplayCountdown.cancel();
+  autoplayPanel = null;
+  autoplayText = null;
   disposeMobileGestures();
   disposePlaybackNotices();
   disposeDesktopIdle();
@@ -1468,24 +1590,43 @@ async function getInstance(_art) {
   art.url = url.value
 }
 
+let initializationGeneration = 0;
 const onMountedFun = async () => {
-  loading.value = true;
-  await getVideoConfig();
-  if (gallery_type.value !== "Movie") {
-    await GetEpisodeList();
+  const generation = ++initializationGeneration;
+  loading.value = !art;
+  playbackError.value = '';
+  try {
+    await getVideoConfig();
+    if (generation !== initializationGeneration) return;
+    if (gallery_type.value !== "Movie") await GetEpisodeList(generation);
+    if (generation !== initializationGeneration) return;
+    await play();
+  } catch (error) {
+    if (generation === initializationGeneration && error.name !== 'AbortError' && error.name !== 'CanceledError') {
+      playbackError.value = errorText(error);
+      art = null;
+    }
+  } finally {
+    if (generation === initializationGeneration) loading.value = false;
   }
-  await play()
-  loading.value = false;
 };
+const playbackError = ref('');
 
 onBeforeRouteUpdate(async (to, from) => {
+  void SendPlayRecord();
+  playbackSession.cancel();
+  autoplayCountdown.cancel();
   selectPlayback(to.query);
   await onMountedFun();
 });
 
-onBeforeRouteLeave((to, from) => {
+onBeforeRouteLeave(async (to, from) => {
   // Browser/system back in web fullscreen exits fullscreen before leaving playback.
   if (exitPlayerFullscreen(art)) return false;
+  void SendPlayRecord();
+  playbackSession.cancel();
+  if (urlBase.value) void mediaP('media.quit', urlBase.value).catch(() => {});
+  autoplayCountdown.cancel();
   if (timerSendPlayRecord.value) {
     clearInterval(timerSendPlayRecord.value)
     timerSendPlayRecord.value = null
@@ -1493,6 +1634,10 @@ onBeforeRouteLeave((to, from) => {
 });
 
 onBeforeUnmount(async () => {
+  initializationGeneration++;
+  autoplayCountdown.cancel();
+  void SendPlayRecord();
+  playbackSession.cancel();
   releaseExternalPlaylist();
   disposeMobileGestures();
   disposePlaybackNotices();
@@ -1508,13 +1653,21 @@ onBeforeUnmount(async () => {
 onMounted(async () => {
   await onMountedFun();
 })
+const flushHiddenProgress = () => { if (document.hidden) void SendPlayRecord(); };
+document.addEventListener('visibilitychange', flushHiddenProgress);
+window.addEventListener('pagehide', SendPlayRecord);
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', flushHiddenProgress);
+  window.removeEventListener('pagehide', SendPlayRecord);
+});
 
 </script>
 
 <template>
-  <div v-if="loading" class="player-loading-shell">
+  <div v-if="loading || playbackError" class="player-loading-shell">
     <button type="button" class="art-back-button player-loading-back" aria-label="返回上一页" @click="backFromPlayer" v-html="backIcon"></button>
-    <div class="load" role="status" aria-label="正在加载影片"></div>
+    <div v-if="loading" class="load" role="status" aria-label="正在加载影片"></div>
+    <n-alert v-else type="error">{{ playbackError }} <n-button @click="onMountedFun">重试</n-button></n-alert>
   </div>
   <div v-else class="content watch-page">
     <n-grid cols="1" item-responsive responsive="screen">

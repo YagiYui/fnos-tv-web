@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {PlaybackSession, createProgressReporter} from './src/views/Play/playback-session.js';
+const sessions = new PlaybackSession();
+const old = sessions.begin(), current = sessions.begin();
+assert.equal(old.signal.aborted, true); assert.equal(old.isCurrent(), false);
+assert.throws(old.assertCurrent, {name: 'AbortError'}); current.assertCurrent();
+sessions.cancel(); assert.throws(current.assertCurrent, {name: 'AbortError'});
+let payload = {episode: 'one', time: 10}, finish, errors = 0;
+const sent = [];
+const reporter = createProgressReporter(() => ({...payload}), data => {
+  sent.push(data); return new Promise(resolve => finish = resolve);
+}, () => errors++);
+const first = reporter.submit();
+payload = {episode: 'one', time: 20}; reporter.submit();
+payload = {episode: 'two', time: 5}; const last = reporter.submit();
+assert.equal(sent.length, 1); assert.equal(sent[0].time, 10);
+finish(); await Promise.resolve(); await Promise.resolve();
+assert.equal(sent.length, 2); assert.deepEqual(sent[1], {episode: 'one', time: 20});
+finish(); await Promise.resolve(); await Promise.resolve();
+assert.equal(sent.length, 3); assert.deepEqual(sent[2], {episode: 'two', time: 5});
+finish(); await Promise.all([first, last]);
+const failed = createProgressReporter(() => payload, async () => {throw new Error('unavailable');}, () => errors++);
+await failed.submit(); assert.equal(errors, 1); await failed.submit(); assert.equal(errors, 2);
+console.log('PASS: playback cancellation, immutable progress snapshots, coalescing, serialized sends and failure recovery');
