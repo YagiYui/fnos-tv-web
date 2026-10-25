@@ -5,11 +5,17 @@ import {darkTheme} from "naive-ui";
 import PageBack from './components/PageBack.vue';
 import {isLibraryActive} from './navigation.js';
 import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from './theme.js';
+import {CatalogCache} from './catalog-cache.js';
 
 import {useMediaDbData} from './store.js'
 import {useRoute} from "vue-router";
 
 const MediaDbData = useMediaDbData()
+const catalogCache = new CatalogCache();
+let initialization = null;
+let initializedAccount = null;
+let metadataUpdated = 0;
+onBeforeUnmount(() => catalogCache.clear());
 
 // 获取 Vue 实例
 const instance = getCurrentInstance();
@@ -62,12 +68,14 @@ if (collapsedItem === "true") {
 const isMobile = ref(window.innerWidth <= 768);
 
 // 监听窗口大小变化
-window.addEventListener('resize', () => {
+const onWindowResize = () => {
   isMobile.value = window.innerWidth <= 768;
   if (isMobile.value) {
     collapsed.value = true;
   }
-});
+};
+window.addEventListener('resize', onWindowResize);
+onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
 
 // 获取用户信息
 async function GetUserInfo() {
@@ -75,7 +83,6 @@ async function GetUserInfo() {
     let api = '/api/v1/user/info'
     UserInfo.value = await COMMON.requests("GET", api, true);
   }
-  load.value = false;
 }
 
 async function getConfig() {
@@ -101,33 +108,16 @@ async function GetMediaDbSum() {
 }
 
 async function GetMediaDbInfos() {
-  let api = '/api/v1/item/list'
-
-  if (data.value !== undefined) {
-    for (let _d of data.value) {
-      let guid = _d.guid;
-      let _data = {
-        "ancestor_guid": guid,
-        "tags": {
-          "type": [
-            "Movie",
-            "TV",
-            "Directory",
-            "Video"
-          ]
-        },
-        "exclude_grouped_video": 1,
-        "sort_type": MediaDbData.sort_type,
-        "sort_column": MediaDbData.sort_column,
-        "page_size": MediaDbSum.value[guid]
-      }
-      let res = await COMMON.requests("POST", api, true, _data);
-      MediaDbInfo.value[guid] = res
-      MediaDbData.info[guid] = res
-    }
-  }
-
-
+  await catalogCache.load(data.value, {
+    account: initializedAccount,
+    sortColumn: MediaDbData.sort_column, sortType: MediaDbData.sort_type,
+    request: (payload, signal) => COMMON.requests('POST', '/api/v1/item/list', true, payload, {signal}),
+    onData: (guid, result) => {
+      MediaDbData.info[guid] = result;
+      delete MediaDbData.errors[guid];
+    },
+    onError: (guid, error) => { MediaDbData.errors[guid] = error?.message || '媒体库加载失败，请进入媒体库重试'; }
+  });
 }
 
 
@@ -160,6 +150,9 @@ function toggDark() {
 
 function handleSelect(key) {
   if (key === "out") {
+    catalogCache.clear();
+    MediaDbData.info = {};
+    MediaDbData.errors = {};
     VueCookies.remove("authorization");
     COMMON.ShowMsg("注销登录成功！")
     setTimeout(function () {
@@ -175,29 +168,36 @@ async function runFunByPath(path, fun) {
 }
 
 async function onMountedFun() {
-  // 获取配置
-  await getConfig();
-
-  // 获取用户信息
-  // await runFunByPath('/login', GetUserInfo)
-  await GetUserInfo();
-  // if (VueCookies.get("authorization")) {
-
-  // 获取每个分类的数量
-  // await runFunByPath('/login', GetMediaDbSum)
-  await GetMediaDbSum();
-
-  // 获取分类列表
-  // await runFunByPath('/login', GetMediaDbList)
-  await GetMediaDbList();
-
-  // 获取每个分类的列表
-  // await runFunByPath('/login', GetMediaDbInfos)
-  await GetMediaDbInfos();
-  // }
-
-  document.title = title.value;
-  load.value = false;
+  if (initialization) return initialization;
+  initialization = (async () => {
+    try {
+      await getConfig().catch(() => {});
+      document.title = title.value;
+      if (!VueCookies.get('authorization') || route.path === '/login') return;
+      await GetUserInfo();
+      const account = UserInfo.value?.guid || UserInfo.value?.uid || UserInfo.value?.username;
+      if (!account) throw new Error('未获取到有效的用户信息');
+      COMMON.userKey = String(account);
+      const accountChanged = account !== initializedAccount;
+      if (accountChanged) {
+        catalogCache.clear();
+        MediaDbData.info = {}; MediaDbData.errors = {};
+      }
+      if (accountChanged || Date.now() - metadataUpdated > 60000) {
+        await Promise.all([GetMediaDbSum(), GetMediaDbList()]);
+        if (route.path === '/login') return;
+        initializedAccount = account;
+        metadataUpdated = Date.now();
+      }
+      load.value = false;
+      await GetMediaDbInfos();
+    } catch (error) {
+      COMMON.ShowMsg(error?.message || '加载失败，请刷新重试');
+    } finally {
+      load.value = false;
+    }
+  })();
+  try { await initialization; } finally { initialization = null; }
 }
 
 onMounted(async () => {
@@ -208,6 +208,10 @@ onMounted(async () => {
 watch(
     () => route.fullPath,
     async (newPath, oldPath) => {
+      if (route.path === '/login') {
+        catalogCache.clear(); initializedAccount = null;
+        MediaDbData.info = {}; MediaDbData.errors = {}; MediaDbData.list = [];
+      }
       if (newPath === "/") {
         await onMountedFun();
       }

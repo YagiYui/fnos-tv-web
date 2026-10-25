@@ -15,6 +15,7 @@ const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
 const keyword = ref('');
 const visibleLibraries = computed(() => (MediaDbData.list || []).filter(item => item.category !== 'Others'));
+const catalogKeys = computed(() => [...new Set([...Object.keys(MediaDbData.info), ...Object.keys(MediaDbData.errors || {})])]);
 const libraryInfo = key => (MediaDbData.list || []).find(item => item.guid === key);
 const libraryRoute = item => ({path: '/list', query: {gallery_uid: item.guid, gallery_type: item.category}});
 
@@ -146,7 +147,8 @@ onUnmounted(() => {
       </template>
       </HomeCarousel>
     </section>
-    <template v-for="key in Object.keys(MediaDbData.info)" :key="key">
+    <template v-for="key in catalogKeys" :key="key">
+      <n-alert v-if="MediaDbData.errors?.[key]" type="error">{{ libraryInfo(key)?.title }}：{{ MediaDbData.errors[key] }}</n-alert>
       <section class="card-shows" v-if="libraryInfo(key)?.category !== 'Others' && filteredItems(key).length">
         <div class="section-heading"><h2>{{ libraryInfo(key)?.title || '媒体库' }}</h2><router-link v-if="libraryInfo(key)" :to="libraryRoute(libraryInfo(key))" class="section-more">查看全部 <i class="bx bx-chevron-right"></i></router-link></div>
         <HomeCarousel :items="filteredItems(key)" :per-view="per_card" :mobile="isMobile">
