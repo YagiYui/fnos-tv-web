@@ -14,6 +14,12 @@ import "node-snackbar/dist/snackbar.min.css"
 import 'boxicons/css/boxicons.min.css'
 import './registerServiceWorker'
 import VueLazyload from 'vue-lazyload'
+import {errorText} from './compat.js';
+import {applyDocumentTheme, readThemePreference} from './theme.js';
+import './assets/cinema.css';
+import './assets/mobile-player.css';
+
+applyDocumentTheme(readThemePreference(), window.matchMedia('(prefers-color-scheme: dark)').matches);
 
 // 创建一个实例
 const app = createApp(App);
@@ -36,6 +42,6 @@ app.config.globalProperties.$device = device;
 app.mount('#app')
 
 app.config.errorHandler = (err, instance, info) => {
-    console.error(err, instance, info)
-    Snackbar.show({pos: 'top-center', text: err, showAction: false});
+    console.error(errorText(err), info)
+    Snackbar.show({pos: 'top-center', text: errorText(err), showAction: false});
 };

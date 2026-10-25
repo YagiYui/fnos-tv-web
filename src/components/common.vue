@@ -4,6 +4,7 @@ import axios from 'axios';
 import VueCookies from 'vue-cookies';
 import Snackbar from 'node-snackbar';
 import router from "@/router/index.js";
+import {errorText} from '../compat.js';
 
 // 定义一些公共的属性和方法
 let title = 'FNOS';
@@ -74,7 +75,7 @@ LoginInstance.interceptors.response.use(
       if (code === 0) {
         return response.data.data;
       }
-      return Promise.reject(response);
+      return Promise.reject(new Error(errorText(response)));
     },
     error => {
       if (axios.isCancel(error) || error.name === 'CanceledError') {
@@ -98,8 +99,7 @@ NoLoginInstance.interceptors.response.use(
       if (code === 0) {
         return response.data.data;
       }
-      ShowMsg(response.data.msg)
-      return Promise.reject(response);
+      return Promise.reject(new Error(errorText(response)));
     },
     error => {
       if (axios.isCancel(error) || error.name === 'CanceledError') {
@@ -133,9 +133,25 @@ async function requests(method, uri, isLogin = false, data = {}) {
 
 }
 
+async function requestsText(uri, params = {}) {
+  const config = instanceRequestBase({
+    method: 'GET', baseURL: apiUrl, url: uri, params,
+    headers: {Authorization: VueCookies.get('authorization') || ''},
+    responseType: 'text'
+  });
+  const response = await axios.request(config);
+  const text = response.data;
+  if (typeof text !== 'string') throw new Error('字幕下载接口返回格式异常');
+  if (text.trim().startsWith('{')) {
+    const data = JSON.parse(text);
+    throw new Error(data.code === -2 ? '字幕鉴权失败，请重新登录' : errorText(data));
+  }
+  return text;
+}
+
 
 function ShowMsg(msg) {
-  Snackbar.show({pos: 'top-center', text: msg, showAction: false});
+  Snackbar.show({pos: 'top-center', text: errorText(msg), showAction: false});
 }
 
 function initConfig() {
@@ -229,6 +245,7 @@ export default {
   imgUrl,
   ShowMsg,
   requests,
+  requestsText,
   fnHost
 }
 </script>

@@ -4,6 +4,7 @@ import {getCurrentInstance, onMounted, ref, watch, onUnmounted} from "vue";
 import {useRoute, useRouter} from "vue-router";
 import axios from "axios";
 import QrcodeVue from 'qrcode.vue'
+import {loginWithPassword, errorText} from '../../compat.js';
 
 
 // 将组件注册到本地
@@ -31,13 +32,22 @@ const qrCheckTimer = ref(null)  // 存储定时器
 
 
 async function LoginUser() {
-  let api = "/api/v1/login"
-  let res = await COMMON.requests("POST", api, false, user.value)
-  VueCookies.set('authorization', res.token, -1)
-  VueCookies.set('Trim-MC-token', res.token, -1)
-  COMMON.ShowMsg('登录成功！')
-  await router.push('/');
+  if (loggingIn.value) return;
+  loggingIn.value = true;
+  try {
+    const res = await loginWithPassword(COMMON.requests, user.value);
+    VueCookies.set('authorization', res.token, -1);
+    VueCookies.set('Trim-MC-token', res.token, -1);
+    COMMON.ShowMsg('登录成功！');
+    await router.push('/');
+  } catch (error) {
+    COMMON.ShowMsg(errorText(error));
+  } finally {
+    loggingIn.value = false;
+  }
 }
+
+const loggingIn = ref(false);
 
 async function NasLogin(code) {
   let api = "/api/v1/auth"
@@ -192,7 +202,7 @@ watch(() => route.query.code, (code) => {
                      autocomplete="off" @keyup.enter="LoginUser">
             </div>
             <div class="form-control">
-              <button class="btn login-btn" @click="LoginUser">登录</button>
+              <button class="btn login-btn" :disabled="loggingIn" @click="LoginUser">{{ loggingIn ? '登录中…' : '登录' }}</button>
             </div>
           </div>
           <div class="qr-section" v-if="isQr">

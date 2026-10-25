@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import {ref,computed} from 'vue';
+import {mediaDetailTitle} from './src/views/Play/player-presentation.js';
+let response;let destination;
+const proxy={$route:{query:{guid:'movie',gallery_type:'Movie'}},$router:{push:route=>destination=route},$COMMON:{requests:async()=>response}};
+const source=fs.readFileSync(new URL('./src/views/Video/VideoData.vue',import.meta.url),'utf8').split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'');
+const ctx=vm.createContext({ref,computed,mediaDetailTitle,getCurrentInstance:()=>({appContext:{config:{globalProperties:proxy}}}),onBeforeRouteUpdate:()=>{},onMounted:()=>{}});
+vm.runInContext(source+';globalThis.detail={GetPayInfo,Play,guid,gallery_type};',ctx);
+const detail=ctx.detail;response={type:'Movie',item:{guid:'movie',parent_guid:'library'}};
+await detail.GetPayInfo();await detail.Play();assert.equal(destination.query.guid,'movie');assert.equal(destination.query.gallery_type,'Movie');
+detail.guid.value='season';detail.gallery_type.value='season';response={type:'Episode',item:{guid:'episode2',parent_guid:'season'}};
+await detail.GetPayInfo();await detail.Play('episode3');assert.equal(destination.query.guid,'season');assert.equal(destination.query.episode_guid,'episode3');
+console.log('PASS: refreshed detail play actions retain movie ID and explicit episode selection');
