@@ -218,7 +218,6 @@ const externalMediaUrl = ref('');
 const externalBusy = ref(false);
 const externalError = ref('');
 const externalPlaylistUrl = ref('');
-const preferExternalFile = /Windows/i.test(navigator.userAgent);
 let externalSessionLink = '', externalGeneration = 0, externalController = null;
 function releaseExternalSession() {
   externalGeneration++;
@@ -238,6 +237,7 @@ watch(externalMediaUrl, value => {
 watch(showModal, visible => { if (!visible) externalMediaUrl.value = ''; });
 const externalHref = player => externalPlayerLink(player, externalMediaUrl.value, navigator.userAgent);
 const externalChoices = externalPlayerChoices(navigator.userAgent, navigator.maxTouchPoints);
+const availableExternalChoices = externalChoices.filter(item => item.value);
 const effectiveExternalPlayer = computed(() => externalChoices.find(item => item.value === preferredExternalPlayer.value)?.value || '');
 const preferredExternalLabel = computed(() => externalChoices.find(item => item.value === effectiveExternalPlayer.value)?.label || '每次选择');
 const preferredExternalHref = computed(() => !externalMediaUrl.value || !effectiveExternalPlayer.value ? ''
@@ -269,7 +269,7 @@ async function openExternalPlayback(snapshot = null) {
       signal: controller.signal, position, quality: selection?.quality || currentQuality.value,
       audioGuid: selection?.audioGuid ?? currentAudio.value?.guid,
       subtitleGuid: selection?.subtitleGuid ?? currentSubtitle.value?.guid ?? '', maxAudioChannels: device.mediaCanPlay.audioChannels,
-      preferFile: preferExternalFile,
+      preferFile: true,
       mediaGuid: StreamList.value?.selected_media_guid,
     });
     if (!current()) { if (source.play_link) void mediaP('media.quit', source.play_link).catch(() => {}); return; }
@@ -2494,87 +2494,27 @@ onBeforeUnmount(() => {
           <i class='bx bx-x'></i>
         </n-button>
       </template>
-      <p>外部播放期间请保留本播放页。链接失效时请重新获取；PotPlayer 图标会下载播放列表，可用 PotPlayer 打开该文件。</p>
-      <p v-if="preferExternalFile">Windows 使用原文件地址，由外部播放器选择音轨、字幕和播放位置。</p>
+      <p>使用原文件或当前远程直链播放。音轨、内嵌字幕和播放位置由外部应用选择，网页画质与字幕调整不会传入。</p>
+      <p>链接有时效，请勿公开分享；失效时重新获取。若外部应用无法解码原文件，可返回网页播放。</p>
       <p v-if="externalBusy" role="status">正在准备外部播放链接…</p>
       <div v-else-if="externalError" role="alert">
         <p>{{ externalError }}</p><n-button @click="openExternalPlayback">重新获取链接</n-button>
       </div>
       <div v-else-if="externalMediaUrl">
-        <p>PotPlayer：下载下方播放列表后用播放器打开，或复制 HTTP 地址，在 PotPlayer 按 Ctrl+U 粘贴播放。</p>
+        <p v-if="availableExternalChoices.some(item => item.value === 'potplayer')">PotPlayer：下载下方播放列表后用播放器打开，或复制 HTTP 地址，在 PotPlayer 按 Ctrl+U 粘贴播放。</p>
         <n-input :value="externalMediaUrl" readonly :input-props="{'aria-label': '外部播放器 HTTP 媒体地址'}" @focus="event => event.target.select?.()" />
         <p v-if="preferredExternalPlayer && !effectiveExternalPlayer">上次首选不适用于当前平台，请从下方选择播放器。</p>
         <p v-if="preferredExternalHref"><a class="external-preferred-action" :href="preferredExternalHref"
           :download="effectiveExternalPlayer === 'potplayer' ? 'fnos-tv-playlist.m3u' : undefined">{{ effectiveExternalPlayer === 'potplayer' ? '下载首选 PotPlayer 播放列表' : `使用首选 ${preferredExternalLabel} 打开` }}</a></p>
       </div>
       <ul v-if="externalMediaUrl && !externalBusy && !externalError" class="play-list">
-        <li class="play-item">
-          <a :href="externalHref('iina')">
+        <li v-for="item in availableExternalChoices" :key="item.value" class="play-item">
+          <a :href="item.value === 'potplayer' ? externalPlaylistUrl : externalHref(item.value)"
+             :download="item.value === 'potplayer' ? 'fnos-tv-playlist.m3u' : undefined"
+             :aria-label="item.value === 'potplayer' ? '下载 PotPlayer 播放列表' : `使用 ${item.label} 打开`">
             <n-tooltip trigger="hover">
-              <template #trigger>
-                <img class="play-icon" src="/images/iina.webp" alt="">
-              </template>
-              IINA
-            </n-tooltip>
-          </a>
-        </li>
-        <li class="play-item">
-          <a :href="externalPlaylistUrl" download="fnos-tv-playlist.m3u" aria-label="下载 PotPlayer 播放列表">
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <img class="play-icon" src="/images/potplayer.webp" alt="">
-              </template>
-              PotPlayer 播放列表
-            </n-tooltip>
-          </a>
-        </li>
-        <li class="play-item">
-          <a :href="externalHref('vlc')">
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <img class="play-icon" src="/images/vlc.webp" alt="">
-              </template>
-              VLC
-            </n-tooltip>
-          </a>
-        </li>
-        <li class="play-item">
-          <a :href="externalHref('nplayer')">
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <img class="play-icon" src="/images/nplayer.webp" alt="">
-              </template>
-              nplayer
-            </n-tooltip>
-          </a>
-        </li>
-        <li class="play-item">
-          <a :href="externalHref('infuse')">
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <img class="play-icon" src="/images/infuse.webp" alt="">
-              </template>
-              infuse
-            </n-tooltip>
-          </a>
-        </li>
-        <li class="play-item">
-          <a :href="externalHref('mxplayer')">
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <img class="play-icon" src="/images/mxplayer.webp" alt="">
-              </template>
-              Mxplayer
-            </n-tooltip>
-          </a>
-        </li>
-        <li class="play-item">
-          <a :href="externalHref('mxplayer-pro')">
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <img class="play-icon" src="/images/mxplayer-pro.webp" alt="">
-              </template>
-              Mxplayer-Pro
+              <template #trigger><img class="play-icon" :src="`/images/${item.value}.webp`" alt=""></template>
+              {{ item.label }}
             </n-tooltip>
           </a>
         </li>

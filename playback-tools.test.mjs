@@ -31,7 +31,7 @@ assert.equal(calls.find(row => row.path.includes('play/quality')).data.media_gui
 assert.equal(metadata.allStreams, all); assert.equal(metadata.streams.video_streams[0].guid, 'v-b');
 await createExternalSession(requests, 'episode', {mediaGuid: 'b', subtitleGuid: 's-b', preferFile: true});
 assert.equal(calls.some(row => row.path.includes('play/play')), false);
-await createExternalSession(requests, 'episode', {mediaGuid: 'b', subtitleGuid: 's-b'});
+await createExternalSession(requests, 'episode', {mediaGuid: 'b', subtitleGuid: 's-b', preferFile:false});
 assert.equal(calls.at(-1).data.media_guid, 'b'); assert.equal(calls.at(-1).data.video_guid, 'v-b');
 assert.equal(calls.at(-1).data.audio_guid, 'a-b'); assert.equal(calls.at(-1).data.subtitle_guid, 's-b');
 const local = localSubtitleVtt('1\r\n00:00:01,000 --> 00:00:03,000\r\n<b>文字</b><img src="https://example.invalid/track">\r\n', 'sample.srt');
