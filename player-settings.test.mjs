@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {playerSettingsGroups, installPictureInPictureOverlays} from './src/views/Play/player-settings.js';
+let switched = 0;
+const original = [{name: '字幕大小', html: '字幕大小', range: [20, 12, 60, 1], onChange: () => ++switched},
+  {name: '默认画质', selector: [{name: '720', html: '720p'}]}, {name: '播放诊断'}, {name: 'aspectRatio'}];
+Object.defineProperty(original[0], '$formatted', {value: true});
+const grouped = playerSettingsGroups(original);
+assert.equal(grouped.find(g => g.name.endsWith('subtitles')).selector[0].onChange(), 1);
+assert.equal(switched, 1);
+assert.ok(!('$formatted' in grouped.flatMap(g => g.selector)[0]));
+assert.equal(grouped.flatMap(g => g.selector).length, original.length, 'Unknown built-in controls remain available');
+assert.deepEqual(playerSettingsGroups(grouped), grouped, 'Repeated regrouping keeps every option once');
+let destroy;
+const video = new EventTarget(), doc = {pictureInPictureElement: null};
+const classes = new Set();
+const player = {video, template: {$player: {classList: {toggle: (name, on) => on ? classes.add(name) : classes.delete(name), remove: name => classes.delete(name)}}}, on: (_, fn) => { destroy = fn; }};
+installPictureInPictureOverlays(player, doc);
+doc.pictureInPictureElement = video; video.dispatchEvent(new Event('enterpictureinpicture')); assert.ok(classes.has('fnos-pip-active'));
+doc.pictureInPictureElement = null; video.dispatchEvent(new Event('leavepictureinpicture')); assert.equal(classes.size, 0);
+doc.pictureInPictureElement = video; destroy(); video.dispatchEvent(new Event('enterpictureinpicture')); assert.equal(classes.size, 0);
+console.log('PASS: settings preserve callbacks and nested choices, regroup without duplicates, and PiP overlay lifecycle cleans up');

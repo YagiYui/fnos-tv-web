@@ -73,6 +73,18 @@
 .art-video-player.fnos-desktop-idle {cursor:none!important}
 
 /* Transport and utility actions share the site's quiet, icon-based styling. */
+.art-video-player.fnos-pip-active .art-subtitle,
+.art-video-player.fnos-pip-active .fnos-subtitle-overlay,
+.art-video-player.fnos-pip-active .fnos-ass-canvas,
+.art-video-player.fnos-pip-active .artplayer-plugin-danmuku {visibility:hidden!important;opacity:0!important;pointer-events:none!important}
+.art-video-player.fnos-grouped-settings .art-settings{height:auto!important;width:min(380px,calc(100% - 24px))!important;max-width:calc(100% - 24px);max-height:calc(100% - 96px)!important;left:auto!important;right:12px!important;bottom:58px!important;border:1px solid #ffffff24;border-radius:12px;background:#181c24f5;box-shadow:0 12px 36px #0007;overscroll-behavior:contain;scrollbar-width:thin}
+.fnos-grouped-settings .art-settings .art-setting-item{min-height:46px;padding:4px 14px;box-sizing:border-box;gap:12px;flex-shrink:0}
+.fnos-grouped-settings .art-settings .art-setting-item-left{min-width:0;gap:10px;flex-shrink:1!important;font-size:13px}
+.fnos-grouped-settings .art-settings .art-setting-item-left-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fnos-grouped-settings .art-settings .art-setting-item-right{min-width:0;max-width:50%;gap:8px}
+.fnos-grouped-settings .art-settings .art-setting-item-right-tooltip{overflow:hidden;text-overflow:ellipsis}
+.fnos-grouped-settings .art-settings .art-setting-item-back{background:#ffffff08;font-weight:600;position:sticky;top:0;z-index:1}
+.fnos-grouped-settings .art-settings .art-setting-item-left-icon .bx{font-size:19px}
 .art-back-button {display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent}
 .art-back-button svg {flex:none}
 /* ArtPlayer sets fill on every SVG: open strokes otherwise become filled wedges. */
