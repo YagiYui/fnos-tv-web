@@ -18,9 +18,9 @@ const instance = getCurrentInstance();
 const proxy = instance.appContext.config.globalProperties;
 const COMMON = proxy.$COMMON;
 const browseSnapshots = useBrowseSnapshots();
-const viewAccount = COMMON.userKey;
-const viewRevision = browseSnapshots.revision;
-const savedHome = browseSnapshots.get(viewAccount, 'home');
+let viewAccount = browseSnapshots.account ?? COMMON.userKey;
+let viewRevision = browseSnapshots.revision;
+let savedHome = browseSnapshots.get(viewAccount, 'home');
 let playController = null;
 let playGeneration = 0;
 function cancelPlayList() { playGeneration++; playController?.abort(); playController = null; }
@@ -146,6 +146,7 @@ window.addEventListener('resize', updateCarouselLayout);
 
 async function GetPlayList() {
   cancelPlayList();
+  if (!viewAccount || viewAccount !== COMMON.userKey) return;
   const generation = playGeneration;
   const controller = playController = new AbortController();
   const current = () => generation === playGeneration && !controller.signal.aborted && viewAccount === COMMON.userKey && viewRevision === browseSnapshots.revision;
@@ -159,7 +160,14 @@ async function GetPlayList() {
     if (current()) throw error;
   } finally { if (current()) playController = null; }
 }
-watch(() => browseSnapshots.revision, () => { cancelPlayList(); playList.value = null; }, {flush: 'sync'});
+watch(() => browseSnapshots.revision, () => {
+  cancelPlayList();
+  viewAccount = browseSnapshots.account ?? COMMON.userKey ?? '';
+  viewRevision = browseSnapshots.revision;
+  savedHome = browseSnapshots.get(viewAccount, 'home');
+  playList.value = savedHome?.playList || null;
+  if (viewAccount && viewAccount === COMMON.userKey) void GetPlayList().catch(error => message.error(error?.message || '继续观看加载失败'));
+}, {flush: 'sync'});
 
 onMounted(async () => {
   // 添加全局点击事件监听
@@ -169,7 +177,7 @@ onMounted(async () => {
   }
   await nextTick();
   pageScroll.scrollTo(search.query ? search.scrollY : savedHome?.scrollY || 0);
-  try { await GetPlayList(); } catch (error) { message.error(error?.message || '继续观看加载失败'); }
+  try { if (!playController) await GetPlayList(); } catch (error) { message.error(error?.message || '继续观看加载失败'); }
 })
 
 // 组件卸载时移除事件监听
