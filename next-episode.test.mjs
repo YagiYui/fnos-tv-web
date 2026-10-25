@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {nextEpisode} from './src/views/Play/player-presentation.js';
+import {nextEpisode, previousEpisode} from './src/views/Play/player-presentation.js';
 const episodes = [{guid: 'one', episode_number: '1'}, {guid: 'two', episode_number: '2'}];
 assert.equal(nextEpisode(episodes, {episode_number: '1'}, 'TV').guid, 'two');
 assert.equal(nextEpisode(episodes, {episode_number: 2}, 'TV'), null);
@@ -10,11 +10,11 @@ assert.equal(nextEpisode(episodes, {episode_number: 1}, 'Movie'), null);
 assert.equal(nextEpisode([{guid: 'two', episode_number: 2, season_number: 2}], {episode_number: 1, season_number: 1}, 'TV'), null);
 const src = fs.readFileSync('./src/views/Play/VideoPlayer.vue', 'utf8');
 let resolvePlay; let plays = 0; const notices = [];
-const context = vm.createContext({nextEpisode, EpisodeList: {value: episodes}, playInfo: {value: {episode_number: 1}},
+const context = vm.createContext({nextEpisode, previousEpisode, EpisodeList: {value: episodes}, playInfo: {value: {episode_number: 1}},
   gallery_type: {value: 'TV'}, episode_guid: {value: 'one'}, SendPlayRecord: async () => {},
   play: () => {plays++; return new Promise(resolve => resolvePlay = resolve);},
   COMMON: {ShowMsg: text => notices.push(text)}, errorText: error => error.message});
-vm.runInContext(src.slice(src.indexOf('let nextEpisodeBusy ='), src.indexOf('async function switchSubtitleUrl')), context);
+vm.runInContext(src.slice(src.indexOf('let episodeSwitchBusy ='), src.indexOf('async function switchSubtitleUrl')), context);
 const first = context.play_next(); await Promise.resolve(); await context.play_next();
 assert.equal(plays, 1); resolvePlay(); await first;
 context.play = async () => {throw new Error('fixture failure');};
@@ -22,4 +22,29 @@ context.episode_guid.value = 'one'; await context.play_next();
 assert.equal(context.episode_guid.value, 'one'); assert.match(notices[0], /fixture failure/);
 context.playInfo.value.episode_number = 2; await context.play_next();
 assert.equal(plays, 1);
+assert.equal(previousEpisode(episodes, {episode_number: '2'}, 'TV').guid, 'one');
+assert.equal(previousEpisode(episodes, {episode_number: 1}, 'TV'), null);
+assert.equal(previousEpisode([{guid: 'one', episode_number: 1}], {episode_number: 3}, 'TV'), null);
+assert.equal(previousEpisode(episodes, {episode_number: 2}, 'Movie'), null);
+assert.equal(previousEpisode([{guid: 'one', episode_number: 1, season_number: 1}], {episode_number: 2, season_number: 2}, 'TV'), null);
+context.play = () => {plays++; return new Promise(resolve => resolvePlay = resolve);};
+context.episode_guid.value = 'two';
+const backward = context.play_previous(); await context.play_next();
+assert.equal(context.episode_guid.value, 'one'); assert.equal(plays, 2, 'Opposite direction shares the in-flight guard');
+resolvePlay(); await backward;
+context.episode_guid.value = 'two'; context.play = async () => {throw new Error('backward failure');};
+await context.play_previous(); assert.equal(context.episode_guid.value, 'two'); assert.match(notices.at(-1), /上一集.*backward failure/);
+
+const controls = [], settings = [], nodes = [];
+context.document = {createElement: () => { const node = {style: {}, attributes: {}, setAttribute(key, value) { this.attributes[key] = value; }}; nodes.push(node); return node; }};
+context.addArtConfig = async (player, key, config) => settings.push(config);
+vm.runInContext(src.slice(src.indexOf('async function addEpisodeNavigation('), src.indexOf('async function UpdateControl(')), context);
+context.playInfo.value.episode_number = 1;
+await context.addEpisodeNavigation({setting: {show: true}}, controls);
+assert.deepEqual(controls.map(control => control.name), ['上一集', '下一集']);
+assert.ok(controls[0].index < controls[1].index);
+assert.equal(nodes[0].disabled, true); assert.equal(nodes[1].disabled, false);
+assert.equal(nodes[0].attributes['aria-label'], '上一集'); assert.match(nodes[0].innerHTML, /rotate\(180deg\)/);
+assert.deepEqual(settings.map(setting => setting.html), ['上一集', '下一集']);
+await settings[0].onClick(); assert.equal(context.episode_guid.value, 'two', 'Disabled previous setting makes no request');
 console.log('PASS: last/missing episodes, string numbers, season bounds, duplicate clicks and failure recovery');

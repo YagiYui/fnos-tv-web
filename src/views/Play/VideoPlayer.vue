@@ -12,9 +12,10 @@ import axios from "axios";
 import {createBlobVTTUrl, SegmentedSubtitleLoader, subtitleOptions, bindSubtitleTrack, subtitleSearchResults, downloadSubtitle, isPgsSubtitle, streamSubtitleGuid} from "./subtitle.js"
 import {episodeDanmaku, errorText} from '../../compat.js';
 import {SubtitleOverlay, waitForAssSubtitle} from './ass-renderer.js';
-import {playbackTitle, playbackSelection, nextEpisode} from './player-presentation.js';
+import {playbackTitle, playbackSelection, nextEpisode, previousEpisode} from './player-presentation.js';
 import {renderDanmaku} from './danmaku-renderer.js';
 import {PlaybackSession, createProgressReporter} from './playback-session.js';
+import {loadPlaybackMetadata, primaryMediaFile} from './playback-metadata.js';
 import {chooseAudio, audioLabel, readPlayerPreference, writePlayerPreference, createAutoplayCountdown} from './audio-tracks.js';
 const playbackSession = new PlaybackSession();
 import {installMobileFullscreen} from './mobile-fullscreen.js';
@@ -634,19 +635,7 @@ async function loadDanmuku() {
 }
 
 // 获取清晰度
-async function GetQuality(operation = null) {
-  let api = "/api/v1/play/quality"
-  let regex = /\d+-\d+-\S+/;
-  let local = StreamList.value.files.find(o => !regex.test(o.path))
-  if (local === null || local === undefined) {
-    local = StreamList.value.files[0];
-  }
-  let _data = {
-    "media_guid": local.guid
-  }
-  let res = await COMMON.requests("POST", api, true, _data, {signal: operation?.signal});
-  operation?.assertCurrent();
-  if (!Array.isArray(res) || !res.length) throw new Error('当前影片没有可用画质');
+function setQualityOptions(res) {
   QualityData.value = res;
 
   // 按分辨率分组，每个分辨率下按码率排序
@@ -761,15 +750,6 @@ async function GetPayInfo(_guid, operation = null) {
   return res;
 }
 
-async function GetStreamList(operation = null) {
-  let api = "/api/v1/stream/list/" + episode_guid.value + '?before_play=1';
-  const streams = await COMMON.requests("GET", api, true, {}, {signal: operation?.signal});
-  operation?.assertCurrent();
-  if (!streams?.files?.length || !streams?.video_streams?.length) throw new Error('当前影片没有可用视频流');
-  StreamList.value = streams;
-  currentAudio.value = chooseAudio(streams.audio_streams, playInfo.value.audio_guid, preferredAudioLanguage.value);
-}
-
 async function GetChannels(s) {
   return s < 6 ? 2 : device.mediaCanPlay.audioChannels >= 6 ? 6 : 2
 }
@@ -802,11 +782,7 @@ async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation 
   let api = "/api/v1/play/play"
   const audio = audioOverride;
   const _channels = audio?.channels || 2;
-  let regex = /\d+-\d+-\S+/;
-  let local = StreamList.value.files.find(o => !regex.test(o.path))
-  if (local === null || local === undefined) {
-    local = StreamList.value.files[0];
-  }
+  const local = primaryMediaFile(StreamList.value);
   let _data = {
     "media_guid": local.guid,
     "video_guid": StreamList.value.video_streams[0].guid,
@@ -1051,6 +1027,24 @@ async function addArtConfig(_art, key, v) {
   _art[key].add(v)
 }
 
+async function addEpisodeNavigation(player, controls) {
+  for (const [direction, name, index, findEpisode] of [[-1, '上一集', 10, previousEpisode], [1, '下一集', 11, nextEpisode]]) {
+    const enabled = Boolean(findEpisode(EpisodeList.value, playInfo.value, gallery_type.value));
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.disabled = !enabled;
+    button.setAttribute('aria-label', name);
+    button.style.cssText = 'display:flex;align-items:center;justify-content:center;border:0;padding:0;background:transparent;color:inherit;cursor:inherit';
+    button.innerHTML = `<img width="22" height="22" alt="" src="./images/next.svg" style="transform:rotate(${direction === -1 ? 180 : 0}deg)">`;
+    const activate = () => enabled ? playAdjacent(direction) : undefined;
+    controls.push({name, position: 'left', index, html: button, tooltip: name,
+      style: {opacity: enabled ? '1' : '0.35', pointerEvents: enabled ? '' : 'none'}, click: activate});
+    await addArtConfig(player, 'setting', {name: name + '设置', html: name, tooltip: enabled ? '' : '没有' + name,
+      onClick: async () => { if (!enabled) return '没有' + name; player.setting.show = false; await activate(); return ''; },
+      mounted: element => { element.setAttribute('aria-disabled', String(!enabled)); element.style.opacity = enabled ? '1' : '0.35'; }});
+  }
+}
+
 async function UpdateControl(_art) {
   let forData = []
 
@@ -1120,21 +1114,7 @@ async function UpdateControl(_art) {
   }
 
   if (EpisodeList.value !== null && EpisodeList.value.length > 0) {
-    let 下一集 = {
-      name: '下一集',
-      position: 'left',
-      index: 11,
-      html: '<img width="22" heigth="22" src="./images/next.svg">',
-      tooltip: '下一集',
-      style: {
-        opacity: nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value) ? '1' : '0.35',
-        pointerEvents: nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value) ? '' : 'none',
-      },
-      click: function () {
-        play_next()
-      }
-    }
-    forData.push(下一集)
+    await addEpisodeNavigation(_art, forData);
 
     let 选集_selector = []
     for (let item of EpisodeList.value) {
@@ -1273,60 +1253,68 @@ async function play() {
   autoplayCountdown.cancel();
   stopAfterCurrent.value = false;
   const operation = playbackSession.begin();
-  subtitleSwitchGeneration++;
-  danmakuLoadGeneration++;
-  showDanmakuSearch.value = false;
-  danmakuResults.value = [];
-  danmakuEpisodes.value = [];
-  danmakuSearchDone.value = false;
-  danmakuSearchError.value = '';
-  subtitleSearchGeneration++;
-  subtitleSearchBusy.value = false;
-  showSubtitleSearch.value = false;
-  subtitleResults.value = [];
-  subtitleSearchDone.value = false;
-  subtitleSearchError.value = '';
-  subtitlePlaybackError.value = '';
-  if (timerSendPlayRecord.value !== null) {
-    clearInterval(timerSendPlayRecord.value)
-  }
-  let playLink = urlBase.value;
-  if (!episode_guid.value) {
-    let guidPlayInfo = await GetPayInfo(guid.value, operation)
-    episode_guid.value = guidPlayInfo.item.guid
-  }
-  let _PayInfo = await GetPayInfo(episode_guid.value, operation);
-  playInfo.value = _PayInfo.item;
-  await GetStreamList(operation);
+  if (art) art.loading.show = true;
+  try {
+    subtitleSwitchGeneration++;
+    danmakuLoadGeneration++;
+    showDanmakuSearch.value = false;
+    danmakuResults.value = [];
+    danmakuEpisodes.value = [];
+    danmakuSearchDone.value = false;
+    danmakuSearchError.value = '';
+    subtitleSearchGeneration++;
+    subtitleSearchBusy.value = false;
+    showSubtitleSearch.value = false;
+    subtitleResults.value = [];
+    subtitleSearchDone.value = false;
+    subtitleSearchError.value = '';
+    subtitlePlaybackError.value = '';
+    if (timerSendPlayRecord.value !== null) {
+      clearInterval(timerSendPlayRecord.value)
+    }
+    let playLink = urlBase.value;
+    let initialInfo = null;
+    if (!episode_guid.value) {
+      initialInfo = await GetPayInfo(guid.value, operation);
+      episode_guid.value = initialInfo.item.guid;
+    }
+    const metadata = await loadPlaybackMetadata(COMMON.requests, episode_guid.value, {signal: operation.signal, initialInfo});
+    operation.assertCurrent();
+    playInfo.value = metadata.info.item;
+    StreamList.value = metadata.streams;
+    currentAudio.value = chooseAudio(metadata.streams.audio_streams, playInfo.value.audio_guid, preferredAudioLanguage.value);
+    setQualityOptions(metadata.qualities);
 
-  subtitleLoader.clear();
-  currentSubtitle.value = null;
-  // 优先使用播放记录中的轨道，其次使用默认轨道。
-  if (StreamList.value && StreamList.value.subtitle_streams && StreamList.value.subtitle_streams.length > 0) {
-    const tracks = StreamList.value.subtitle_streams;
-    currentSubtitle.value = tracks.find(sub => sub.guid === playInfo.value.subtitle_guid)
-      || tracks.find(sub => Number(sub.is_default) === 1) || tracks[0];
-  }
+    subtitleLoader.clear();
+    currentSubtitle.value = null;
+    // 优先使用播放记录中的轨道，其次使用默认轨道。
+    if (StreamList.value && StreamList.value.subtitle_streams && StreamList.value.subtitle_streams.length > 0) {
+      const tracks = StreamList.value.subtitle_streams;
+      currentSubtitle.value = tracks.find(sub => sub.guid === playInfo.value.subtitle_guid)
+        || tracks.find(sub => Number(sub.is_default) === 1) || tracks[0];
+    }
 
-  await GetQuality(operation);
-  await GetPalyUrl(undefined, operation);
-  operation.assertCurrent();
-  GetEmoji();
-  if (art !== null) {
-    await art.switchUrl(url.value);
-  }
-  if (playLink && playLink !== urlBase.value) {
-    void mediaP("media.quit", playLink).catch(() => {});
+    await GetPalyUrl(undefined, operation);
+    operation.assertCurrent();
+    GetEmoji();
+    if (art !== null) {
+      await art.switchUrl(url.value);
+    }
+    if (playLink && playLink !== urlBase.value) {
+      void mediaP("media.quit", playLink).catch(() => {});
+    }
+  } finally {
+    if (operation.isCurrent() && art) art.loading.show = false;
   }
 }
 
-let nextEpisodeBusy = false;
-async function play_next() {
-  if (nextEpisodeBusy) return;
-  const episode = nextEpisode(EpisodeList.value, playInfo.value, gallery_type.value);
+let episodeSwitchBusy = false;
+async function playAdjacent(direction) {
+  if (episodeSwitchBusy) return;
+  const episode = (direction === -1 ? previousEpisode : nextEpisode)(EpisodeList.value, playInfo.value, gallery_type.value);
   if (!episode) return;
   const previous = episode_guid.value;
-  nextEpisodeBusy = true;
+  episodeSwitchBusy = true;
   try {
     void SendPlayRecord();
     episode_guid.value = episode.guid;
@@ -1334,12 +1322,14 @@ async function play_next() {
   } catch (error) {
     if (error.name !== 'AbortError' && error.name !== 'CanceledError') {
       if (episode_guid.value === episode.guid) episode_guid.value = previous;
-      COMMON.ShowMsg('切换下一集失败：' + errorText(error));
+      COMMON.ShowMsg(`切换${direction === -1 ? '上一集' : '下一集'}失败：` + errorText(error));
     }
   } finally {
-    nextEpisodeBusy = false;
+    episodeSwitchBusy = false;
   }
 }
+function play_next() { return playAdjacent(1); }
+function play_previous() { return playAdjacent(-1); }
 
 async function switchSubtitleUrl({plain = false} = {}) {
   if (!currentSubtitle.value || !urlBase.value) return;

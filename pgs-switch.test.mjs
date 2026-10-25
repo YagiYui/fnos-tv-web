@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import {primaryMediaFile} from './src/views/Play/playback-metadata.js';
 import {isPgsSubtitle,streamSubtitleGuid} from './src/views/Play/subtitle.js';
 const track={guid:'old-pgs',index:6,codec_name:'hdmv_pgs_subtitle',html:'old'};
 assert.equal(streamSubtitleGuid(track),'');assert.equal(streamSubtitleGuid({guid:'ass',codec_name:'ass'}),'ass');
@@ -9,6 +10,7 @@ const play=source.slice(source.indexOf('async function GetPalyUrl(startTimestamp
 const change=source.slice(source.indexOf('async function switchSubtitle(item'),source.indexOf('async function addArtConfig'));
 const events=[],calls=[],errors=[];
 const context=vm.createContext({isPgsSubtitle,streamSubtitleGuid,Math,window:{location:{origin:'http://nas'}},serverSubtitleGuid:null,subtitleSwitchGeneration:0,currentSubtitle:{value:track},subtitleTrackGuid:{value:''},subtitlePlaybackError:{value:''},subtitleErrorShown:false,subtitleLoader:{clear(){events.push('clear');}},COMMON:{fnHost:'/fnos',async requests(method,url,auth,payload){calls.push({url,payload});return {play_link:'/v/media/video/preset.m3u8'};}},GetChannels:async()=>2,playInfo:{value:{watched_ts:42}},StreamList:{value:{audio_streams:[{guid:'audio',channels:2}],video_streams:[{guid:'video',codec_name:'hevc',bps:100}],files:[{guid:'file',path:'/library/movie.mkv'}]}},QualityData:{value:[{resolution:'1080p'}]},art:{currentTime:42,loading:{show:false},async switchUrl(){events.push('video-switch');}},urlBase:{value:''},url:{value:''},playUrl:{value:''},use_302_play:{value:false},async switchSubtitleUrl(){events.push('render:'+context.currentSubtitle.value.guid);},UpdateControl:async()=>{},showSubtitleError:e=>errors.push(e),mediaP:async()=>{}});
+context.primaryMediaFile = primaryMediaFile;
 context.currentAudio = {value: context.StreamList.value.audio_streams[0]};
 vm.runInContext(play+change+';globalThis.actions={GetPalyUrl,switchSubtitle};',context);
 await context.actions.GetPalyUrl();assert.equal(calls[0].payload.subtitle_guid,'');assert.equal(context.serverSubtitleGuid,'');
