@@ -1,3 +1,14 @@
+export const EXTERNAL_PLAYER_IDS = Object.freeze(['iina', 'potplayer', 'nplayer', 'infuse', 'vlc', 'mxplayer', 'mxplayer-pro']);
+const playerNames = {iina: 'IINA', potplayer: 'PotPlayer 播放列表', nplayer: 'nPlayer', infuse: 'Infuse',
+  vlc: 'VLC', mxplayer: 'MX Player', 'mxplayer-pro': 'MX Player Pro'};
+export function externalPlayerChoices(userAgent = '', maxTouchPoints = 0) {
+  const ids = /Windows/i.test(userAgent) ? ['potplayer', 'vlc']
+    : /Android/i.test(userAgent) ? ['vlc', 'nplayer', 'mxplayer', 'mxplayer-pro']
+      : /iPhone|iPad|iPod/i.test(userAgent) || (/Macintosh/i.test(userAgent) && maxTouchPoints > 1) ? ['infuse', 'nplayer', 'vlc']
+        : /Macintosh|Mac OS/i.test(userAgent) ? ['iina', 'nplayer', 'vlc'] : ['vlc'];
+  return [{value: '', label: '每次选择'}, ...ids.map(value => ({value, label: playerNames[value]}))];
+}
+
 export function externalPlayerLink(player, media, userAgent = '') {
   if (!media) return '';
   const url = new URL(media);
