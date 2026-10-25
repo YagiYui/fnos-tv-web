@@ -1,7 +1,7 @@
 <script setup>
 import flvjs from 'flv.js';
 import Hls from 'hls.js';
-import {computed, getCurrentInstance, onBeforeUnmount, onMounted, ref, watch} from "vue";
+import {computed, getCurrentInstance, onBeforeUnmount, onMounted, ref, shallowRef, watch} from "vue";
 
 import Artplayer from "./ArtPlayer.vue";
 import {onBeforeRouteLeave, onBeforeRouteUpdate} from "vue-router";
@@ -16,6 +16,8 @@ import {playbackTitle, playbackSelection, nextEpisode, previousEpisode} from './
 import {renderDanmaku} from './danmaku-renderer.js';
 import {PlaybackSession, createProgressReporter} from './playback-session.js';
 import {loadPlaybackMetadata, primaryMediaFile} from './playback-metadata.js';
+import PlaybackRecoveryCard from './PlaybackRecoveryCard.vue';
+import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRecoverableSource, bufferedPlaybackFailure} from './playback-recovery.js';
 import {chooseAudio, audioLabel, readPlayerPreference, writePlayerPreference, createAutoplayCountdown} from './audio-tracks.js';
 const playbackSession = new PlaybackSession();
 import {installMobileFullscreen} from './mobile-fullscreen.js';
@@ -27,7 +29,8 @@ let disposePlaybackNotices = () => {};
 import {installDesktopIdle} from './desktop-idle.js';
 let disposeDesktopIdle = () => {};
 import {externalPlayerLink, externalPlaylist} from './external-player.js';
-import {replaceMediaEngine, releaseMediaEngine} from './media-lifecycle.js';
+import {createExternalSession} from './external-session.js';
+import {replaceMediaEngine, releaseMediaEngine, isCurrentMediaEngine, currentMediaEngine} from './media-lifecycle.js';
 let disposeMobileDanmaku = () => {};
 const touchPlayer = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.matchMedia('(pointer: coarse)').matches);
 let disposeMobileFullscreen = () => {};
@@ -115,6 +118,15 @@ const externalMediaUrl = ref('');
 const externalBusy = ref(false);
 const externalError = ref('');
 const externalPlaylistUrl = ref('');
+const preferExternalFile = /Windows/i.test(navigator.userAgent);
+let externalSessionLink = '', externalGeneration = 0, externalController = null;
+function releaseExternalSession() {
+  externalGeneration++;
+  externalController?.abort();
+  externalController = null;
+  if (externalSessionLink) void mediaP('media.quit', externalSessionLink).catch(() => {});
+  externalSessionLink = '';
+}
 function releaseExternalPlaylist() {
   if (externalPlaylistUrl.value) URL.revokeObjectURL(externalPlaylistUrl.value);
   externalPlaylistUrl.value = '';
@@ -125,8 +137,10 @@ watch(externalMediaUrl, value => {
 });
 watch(showModal, visible => { if (!visible) externalMediaUrl.value = ''; });
 const externalHref = player => externalPlayerLink(player, externalMediaUrl.value, navigator.userAgent);
-async function openExternalPlayback() {
+async function openExternalPlayback(snapshot = null) {
   if (externalBusy.value) return;
+  const selection = snapshot?.episode === episode_guid.value ? snapshot : null;
+  const position = selection?.position ?? (playInfo.value?.guid === episode_guid.value ? art?.currentTime : null);
   art?.pause();
   if (art?.fullscreen) art.fullscreen = false;
   if (art?.fullscreenWeb) art.fullscreenWeb = false;
@@ -135,6 +149,10 @@ async function openExternalPlayback() {
   externalError.value = '';
   externalBusy.value = true;
   const episode = episode_guid.value;
+  releaseExternalSession();
+  const generation = externalGeneration;
+  const controller = externalController = new AbortController();
+  const current = () => generation === externalGeneration && episode === episode_guid.value && !controller.signal.aborted;
   try {
     if (use_302_play.value && url.value !== COMMON.fnHost + urlBase.value) {
       const direct = new URL(playUrl.value, window.location.origin);
@@ -142,15 +160,27 @@ async function openExternalPlayback() {
       externalMediaUrl.value = direct.href;
       return;
     }
-    const response = await axios.post('/danmu/external-play', {play_link: urlBase.value}, {
+    const source = await createExternalSession(COMMON.requests, episode, {
+      signal: controller.signal, position, quality: selection?.quality || currentQuality.value,
+      audioGuid: selection?.audioGuid ?? currentAudio.value?.guid,
+      subtitleGuid: selection?.subtitleGuid ?? currentSubtitle.value?.guid ?? '', maxAudioChannels: device.mediaCanPlay.audioChannels,
+      preferFile: preferExternalFile,
+    });
+    if (!current()) { if (source.play_link) void mediaP('media.quit', source.play_link).catch(() => {}); return; }
+    externalSessionLink = source.play_link || '';
+    const response = await axios.post('/danmu/external-play', source, {
+      signal: controller.signal,
       headers: {Authorization: VueCookies.get('authorization') || ''}
     });
-    if (episode !== episode_guid.value || !showModal.value) return;
+    if (!current() || !showModal.value) return;
     if (response.data?.code !== 0 || !response.data.data?.url) throw new Error(response.data?.msg || '外部播放链接获取失败');
     externalMediaUrl.value = new URL(response.data.data.url, window.location.origin).href;
   } catch (error) {
-    externalError.value = error.response?.data?.msg || errorText(error);
-  } finally { externalBusy.value = false; }
+    if (current()) {
+      externalError.value = error.response?.data?.msg || '外部播放链接准备失败，请重新获取链接';
+      if (externalSessionLink) { void mediaP('media.quit', externalSessionLink).catch(() => {}); externalSessionLink = ''; }
+    }
+  } finally { if (current()) externalBusy.value = false; }
 }
 
 const loading = ref(true);
@@ -439,6 +469,91 @@ const danmuConfig = ref({
 const qualitySelector = ref([]);
 const currentQuality = ref(null);
 
+const recoveryState = ref(null);
+const recoveryBusy = ref(false);
+const recoveryTarget = shallowRef(null);
+let sourceEpisode = null, sourcePosition = null, sourcePaused = false, sourceTimer = null, recoveryRun = 0;
+let bufferedRecovery = null;
+const lowerRecoveryQuality = computed(() => playInfo.value?.guid === recoveryState.value?.episode
+  ? lowerPlaybackQuality(QualityData.value, recoveryState.value?.quality) : null);
+const lowerRecoveryLabel = computed(() => lowerRecoveryQuality.value
+  ? `${lowerRecoveryQuality.value.resolution} / ${(lowerRecoveryQuality.value.bitrate / 1000000).toFixed(1)}Mbps` : '');
+const canRecoverExternally = computed(() => Boolean(recoveryState.value?.episode && playInfo.value?.guid === recoveryState.value.episode && StreamList.value?.files?.length));
+
+function clearPlaybackRecovery() {
+  clearTimeout(sourceTimer);
+  bufferedRecovery?.reset();
+  recoveryState.value = null;
+  playbackError.value = '';
+}
+
+function reportPlaybackFailure(error, snapshot = null) {
+  if (isPlaybackAbort(error)) return;
+  clearTimeout(sourceTimer);
+  autoplayCountdown.cancel();
+  const same = playInfo.value?.guid === episode_guid.value;
+  const state = snapshot || recoveryState.value || {
+    episode: episode_guid.value,
+    position: sourceEpisode === episode_guid.value ? sourcePosition : null,
+    paused: sourcePaused,
+    audioGuid: same ? currentAudio.value?.guid : undefined,
+    subtitleGuid: same ? currentSubtitle.value?.guid || '' : undefined,
+    quality: same ? {...currentQuality.value} : null,
+  };
+  recoveryState.value = {...state, episode: episode_guid.value, message: playbackFailureMessage(error)};
+  if (art) {
+    art.pause();
+    art.loading.show = false;
+    art.controls.show = true;
+  } else playbackError.value = recoveryState.value.message;
+}
+
+function watchPlaybackSource(player, source) {
+  if (player !== art || source !== url.value) return false;
+  player.fnosSourceGeneration = playbackSession.generation;
+  sourceEpisode = episode_guid.value;
+  sourcePosition = playInfo.value?.watched_ts ?? 0;
+  clearTimeout(sourceTimer);
+  const generation = playbackSession.generation;
+  sourceTimer = setTimeout(() => {
+    if (player === art && generation === playbackSession.generation) {
+      player.emit('fnos:media-error', {code: 'PLAYBACK_TIMEOUT'});
+    }
+  }, 45000);
+  return true;
+}
+
+async function recoverPlayback(mode = 'retry') {
+  if (recoveryBusy.value || !recoveryState.value) return;
+  const snapshot = {...recoveryState.value};
+  if (mode === 'lower') {
+    if (!lowerRecoveryQuality.value) return;
+    snapshot.quality = {...lowerRecoveryQuality.value};
+  }
+  if (mode === 'external' && !canRecoverExternally.value) return;
+  recoveryBusy.value = true;
+  const run = ++recoveryRun;
+  const initialization = initializationGeneration;
+  const current = () => run === recoveryRun && initialization === initializationGeneration;
+  try {
+    // Initialization prerequisites can also have been the failing stage.
+    if (!art) {
+      await getVideoConfig();
+      if (!current()) return;
+      if (gallery_type.value !== 'Movie') await GetEpisodeList(initialization);
+    }
+    if (!current() || snapshot.episode !== episode_guid.value) return;
+    if (mode === 'external') { await openExternalPlayback(snapshot); return; }
+    await play(snapshot);
+    if (!current() || (snapshot.episode && snapshot.episode !== episode_guid.value)) return;
+    loading.value = false;
+  } catch (error) {
+    if (current() && (!snapshot.episode || snapshot.episode === episode_guid.value) && !isPlaybackAbort(error)) reportPlaybackFailure(error, snapshot);
+  } finally {
+    if (current()) recoveryBusy.value = false;
+  }
+}
+
 const IsFullscreen = () => {
   art.fullscreen
 }
@@ -480,6 +595,7 @@ const setting = ref({
   id: "",
   customType: {
     m3u8: function (video, url, player) {
+      if (!watchPlaybackSource(player, url)) return;
       const hls = replaceMediaEngine(player, () => new Hls({
         enableWebVTT: false, // 仍然关闭 WebVTT 的原生渲染
         renderTextTracksNatively: false,
@@ -491,22 +607,38 @@ const setting = ref({
           // 还可以在这里对其他请求做自定义头等处理
         },
       }));
+      hls.on(Hls.Events.ERROR, (_event, error) => {
+        if (error.fatal && isCurrentMediaEngine(player, hls) && player.fnosSourceGeneration === playbackSession.generation) {
+          player.emit('fnos:media-error', {category: error.type === Hls.ErrorTypes.MEDIA_ERROR ? 'decode' : 'network'});
+        }
+      });
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        if (isCurrentMediaEngine(player, hls)) player.emit('fnos:network-ready');
+      });
       hls.loadSource(url)
       hls.attachMedia(video)
     },
     flv: function (video, url, player) {
+      if (!watchPlaybackSource(player, url)) return;
       const flvPlayer = replaceMediaEngine(player, () => flvjs.createPlayer({
         type: 'flv',
         url: url
       }))
+      flvPlayer.on(flvjs.Events.ERROR, type => {
+        if (isCurrentMediaEngine(player, flvPlayer) && player.fnosSourceGeneration === playbackSession.generation) {
+          player.emit('fnos:media-error', {category: type === flvjs.ErrorTypes.MEDIA_ERROR ? 'decode' : 'network'});
+        }
+      });
       flvPlayer.attachMediaElement(video)
       flvPlayer.load()
     },
     mkv: function (video, url, player) {
+      if (!watchPlaybackSource(player, url)) return;
       releaseMediaEngine(player);
       video.src = url;
     },
     mp4: function (video, url, player) {
+      if (!watchPlaybackSource(player, url)) return;
       releaseMediaEngine(player);
       video.src = url;
     }
@@ -775,7 +907,7 @@ async function GetPalyUrlBy302(operation = null) {
   }
 }
 
-async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation = null, audioOverride = currentAudio.value) {
+async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation = null, audioOverride = currentAudio.value, qualityOverride = null) {
   if (art !== null && art !== undefined) {
     art.loading.show = true;
   }
@@ -787,8 +919,8 @@ async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation 
     "media_guid": local.guid,
     "video_guid": StreamList.value.video_streams[0].guid,
     "video_encoder": StreamList.value.video_streams[0].codec_name,
-    "resolution": QualityData.value[0].resolution,
-    "bitrate": StreamList.value.video_streams[0].bps,
+    "resolution": qualityOverride?.resolution ?? QualityData.value[0].resolution,
+    "bitrate": qualityOverride?.bitrate ?? StreamList.value.video_streams[0].bps,
     "startTimestamp": Math.max(0, Math.floor(Number(startTimestamp) || 0)),
     "audio_encoder": "aac",
     "audio_guid": audio?.guid || '',
@@ -796,6 +928,9 @@ async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation 
     "channels": await GetChannels(_channels)
   };
   let res = await COMMON.requests("POST", api, true, _data, {signal: operation?.signal})
+  if (operation && !operation.isCurrent() && res?.play_link && res.play_link !== urlBase.value) {
+    void mediaP('media.quit', res.play_link).catch(() => {});
+  }
   operation?.assertCurrent();
   if (typeof res?.play_link === 'string' && res.play_link) {
     serverSubtitleGuid = _data.subtitle_guid;
@@ -811,15 +946,16 @@ async function GetPalyUrl(startTimestamp = playInfo.value.watched_ts, operation 
 }
 
 function playbackRecordSnapshot() {
-  if (art && art.currentTime >= 5 && StreamList.value?.video_streams?.length && QualityData.value?.length) {
+  if (art && !recoveryState.value && sourceEpisode === episode_guid.value && sourceEpisode === playInfo.value?.guid
+      && art.currentTime >= 5 && StreamList.value?.video_streams?.length && QualityData.value?.length) {
     return {
       "item_guid": playInfo.value?.guid || episode_guid.value,
       "media_guid": StreamList.value.video_streams[0].media_guid,
       "video_guid": StreamList.value.video_streams[0].guid,
       "audio_guid": currentAudio.value?.guid || '',
       "subtitle_guid": currentSubtitle.value?.guid || "",
-      "resolution": QualityData.value[0].resolution,
-      "bitrate": QualityData.value[0].bitrate,
+      "resolution": currentQuality.value?.resolution ?? QualityData.value[0].resolution,
+      "bitrate": currentQuality.value?.bitrate ?? QualityData.value[0].bitrate,
       "ts": Math.floor(art.currentTime),
       "duration": art.duration,
       "play_link": urlBase.value,
@@ -1249,11 +1385,17 @@ async function UpdateControl(_art) {
 
 }
 
-async function play() {
+async function play(options = null) {
   autoplayCountdown.cancel();
   stopAfterCurrent.value = false;
   const operation = playbackSession.begin();
-  if (art) art.loading.show = true;
+  if (!options) { recoveryRun++; clearPlaybackRecovery(); recoveryBusy.value = false; }
+  else clearTimeout(sourceTimer);
+  sourcePaused = options?.paused ?? art?.video?.paused ?? false;
+  sourceEpisode = null;
+  sourcePosition = null;
+  if (art) { art.pause(); art.loading.show = true; }
+  const playLink = urlBase.value;
   try {
     subtitleSwitchGeneration++;
     danmakuLoadGeneration++;
@@ -1272,7 +1414,6 @@ async function play() {
     if (timerSendPlayRecord.value !== null) {
       clearInterval(timerSendPlayRecord.value)
     }
-    let playLink = urlBase.value;
     let initialInfo = null;
     if (!episode_guid.value) {
       initialInfo = await GetPayInfo(guid.value, operation);
@@ -1282,27 +1423,45 @@ async function play() {
     operation.assertCurrent();
     playInfo.value = metadata.info.item;
     StreamList.value = metadata.streams;
-    currentAudio.value = chooseAudio(metadata.streams.audio_streams, playInfo.value.audio_guid, preferredAudioLanguage.value);
+    currentAudio.value = chooseAudio(metadata.streams.audio_streams, options?.audioGuid ?? playInfo.value.audio_guid, preferredAudioLanguage.value);
     setQualityOptions(metadata.qualities);
+    if (options?.quality) {
+      const requested = metadata.qualities.find(item => item.resolution === options.quality.resolution && Number(item.bitrate) === Number(options.quality.bitrate));
+      if (!requested) throw new Error('原画质已不可用');
+      currentQuality.value = {...requested, html: `${requested.resolution} (${(requested.bitrate / 1000000).toFixed(1)}Mbps)`};
+    }
+    if (options?.position != null) playInfo.value.watched_ts = options.position;
 
     subtitleLoader.clear();
     currentSubtitle.value = null;
     // 优先使用播放记录中的轨道，其次使用默认轨道。
     if (StreamList.value && StreamList.value.subtitle_streams && StreamList.value.subtitle_streams.length > 0) {
       const tracks = StreamList.value.subtitle_streams;
-      currentSubtitle.value = tracks.find(sub => sub.guid === playInfo.value.subtitle_guid)
+      if (options?.subtitleGuid !== '') currentSubtitle.value = tracks.find(sub => sub.guid === (options?.subtitleGuid ?? playInfo.value.subtitle_guid))
         || tracks.find(sub => Number(sub.is_default) === 1) || tracks[0];
     }
 
-    await GetPalyUrl(undefined, operation);
+    await GetPalyUrl(undefined, operation, currentAudio.value, options?.quality || null);
     operation.assertCurrent();
     GetEmoji();
-    if (art !== null) {
-      await art.switchUrl(url.value);
+    if (art !== null && !options?.external) {
+      watchPlaybackSource(art, url.value);
+      await switchRecoverableSource(art, url.value, {signal: operation.signal, position: playInfo.value.watched_ts, paused: sourcePaused});
+      operation.assertCurrent();
+    }
+    if (!options?.external) {
+      clearPlaybackRecovery();
+      if (art) await UpdateControl(art);
     }
     if (playLink && playLink !== urlBase.value) {
       void mediaP("media.quit", playLink).catch(() => {});
     }
+  } catch (error) {
+    if (operation.isCurrent() && !isPlaybackAbort(error)) {
+      if (urlBase.value && urlBase.value !== playLink) void mediaP('media.quit', urlBase.value).catch(() => {});
+      reportPlaybackFailure(error, options);
+    }
+    throw error;
   } finally {
     if (operation.isCurrent() && art) art.loading.show = false;
   }
@@ -1321,7 +1480,7 @@ async function playAdjacent(direction) {
     await play();
   } catch (error) {
     if (error.name !== 'AbortError' && error.name !== 'CanceledError') {
-      if (episode_guid.value === episode.guid) episode_guid.value = previous;
+      if (episode_guid.value === episode.guid && !recoveryState.value) episode_guid.value = previous;
       COMMON.ShowMsg(`切换${direction === -1 ? '上一集' : '下一集'}失败：` + errorText(error));
     }
   } finally {
@@ -1427,6 +1586,22 @@ async function ready() {
 
 const artF = async (data) => {
   art = data;
+  const player = data;
+  const current = () => player === art && player.fnosSourceGeneration === playbackSession.generation;
+  bufferedRecovery?.dispose();
+  const guard = bufferedRecovery = bufferedPlaybackFailure(player, reportPlaybackFailure, {
+    isCurrent: current, resume: () => currentMediaEngine(player)?.startLoad?.(player.currentTime),
+  });
+  player.on('destroy', () => guard.dispose());
+  const fail = error => { if (current()) guard.notify(error); };
+  player.on('fnos:media-error', fail);
+  player.on('video:error', () => { if (player.video.error) fail(player.video.error); });
+  player.on('video:canplay', () => { if (current()) clearTimeout(sourceTimer); });
+  player.on('video:timeupdate', () => {
+    if (current() && !recoveryState.value && Number.isFinite(player.currentTime)) sourcePosition = player.currentTime;
+  });
+  player.on('video:play', () => { if (current() && !recoveryState.value) sourcePaused = false; });
+  player.on('video:pause', () => { if (current() && !recoveryState.value) sourcePaused = true; });
   setSubtitleFontSize(subtitleFontSize.value);
   bindSubtitleTrack(art);
   art.on('subtitleLoad', () => {
@@ -1576,7 +1751,9 @@ async function getInstance(_art) {
   disposeMobileGestures = installMobileGestures(_art);
   disposeDesktopIdle = installDesktopIdle(_art);
   art = _art;
+  recoveryTarget.value = _art.template.$player;
   art.id = episode_guid.value
+  watchPlaybackSource(art, url.value);
   art.url = url.value
 }
 
@@ -1593,8 +1770,7 @@ const onMountedFun = async () => {
     await play();
   } catch (error) {
     if (generation === initializationGeneration && error.name !== 'AbortError' && error.name !== 'CanceledError') {
-      playbackError.value = errorText(error);
-      art = null;
+      reportPlaybackFailure(error);
     }
   } finally {
     if (generation === initializationGeneration) loading.value = false;
@@ -1603,8 +1779,12 @@ const onMountedFun = async () => {
 const playbackError = ref('');
 
 onBeforeRouteUpdate(async (to, from) => {
+  releaseExternalSession();
+  externalBusy.value = false;
   void SendPlayRecord();
   playbackSession.cancel();
+  recoveryRun++;
+  clearPlaybackRecovery();
   autoplayCountdown.cancel();
   selectPlayback(to.query);
   await onMountedFun();
@@ -1613,8 +1793,12 @@ onBeforeRouteUpdate(async (to, from) => {
 onBeforeRouteLeave(async (to, from) => {
   // Browser/system back in web fullscreen exits fullscreen before leaving playback.
   if (exitPlayerFullscreen(art)) return false;
+  releaseExternalSession();
   void SendPlayRecord();
   playbackSession.cancel();
+  initializationGeneration++;
+  recoveryRun++;
+  clearPlaybackRecovery();
   if (urlBase.value) void mediaP('media.quit', urlBase.value).catch(() => {});
   autoplayCountdown.cancel();
   if (timerSendPlayRecord.value) {
@@ -1624,10 +1808,15 @@ onBeforeRouteLeave(async (to, from) => {
 });
 
 onBeforeUnmount(async () => {
+  releaseExternalSession();
   initializationGeneration++;
+  recoveryRun++;
   autoplayCountdown.cancel();
   void SendPlayRecord();
   playbackSession.cancel();
+  clearTimeout(sourceTimer);
+  bufferedRecovery?.dispose();
+  recoveryTarget.value = null;
   releaseExternalPlaylist();
   disposeMobileGestures();
   disposePlaybackNotices();
@@ -1656,8 +1845,9 @@ onBeforeUnmount(() => {
 <template>
   <div v-if="loading || playbackError" class="player-loading-shell">
     <button type="button" class="art-back-button player-loading-back" aria-label="返回上一页" @click="backFromPlayer" v-html="backIcon"></button>
-    <div v-if="loading" class="load" role="status" aria-label="正在加载影片"></div>
-    <n-alert v-else type="error">{{ playbackError }} <n-button @click="onMountedFun">重试</n-button></n-alert>
+    <PlaybackRecoveryCard v-if="playbackError" :message="playbackError" :busy="recoveryBusy" :lower-label="lowerRecoveryLabel" :can-external="canRecoverExternally"
+      @retry="recoverPlayback()" @lower="recoverPlayback('lower')" @external="recoverPlayback('external')" @back="backFromPlayer" />
+    <div v-else class="load" role="status" aria-label="正在加载影片"></div>
   </div>
   <div v-else class="content watch-page">
     <n-grid cols="1" item-responsive responsive="screen">
@@ -1695,6 +1885,11 @@ onBeforeUnmount(() => {
       </n-grid-item>
     </n-grid>
   </div>
+
+  <Teleport v-if="recoveryTarget && recoveryState && !playbackError" :to="recoveryTarget">
+    <PlaybackRecoveryCard :message="recoveryState.message" :busy="recoveryBusy" :lower-label="lowerRecoveryLabel" :can-external="canRecoverExternally"
+      @retry="recoverPlayback()" @lower="recoverPlayback('lower')" @external="recoverPlayback('external')" @back="backFromPlayer" />
+  </Teleport>
 
   <n-modal v-model:show="showDanmakuSearch" title="搜索与选择弹幕" preset="card"
            :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">
@@ -1816,14 +2011,15 @@ onBeforeUnmount(() => {
           <i class='bx bx-x'></i>
         </n-button>
       </template>
-      <p>临时播放链接有效期 4 小时，播放期间请保留本网页。服务重启后请重新获取链接。</p>
+      <p>外部播放期间请保留本播放页。链接失效时请重新获取；PotPlayer 图标会下载播放列表，可用 PotPlayer 打开该文件。</p>
+      <p v-if="preferExternalFile">Windows 使用原文件地址，由外部播放器选择音轨、字幕和播放位置。</p>
       <p v-if="externalBusy" role="status">正在准备外部播放链接…</p>
       <div v-else-if="externalError" role="alert">
         <p>{{ externalError }}</p><n-button @click="openExternalPlayback">重新获取链接</n-button>
       </div>
       <div v-else-if="externalMediaUrl">
         <p>PotPlayer：下载下方播放列表后用播放器打开，或复制 HTTP 地址，在 PotPlayer 按 Ctrl+U 粘贴播放。</p>
-        <n-input :value="externalMediaUrl" readonly aria-label="外部播放器 HTTP 媒体地址" @focus="event => event.target.select?.()" />
+        <n-input :value="externalMediaUrl" readonly :input-props="{'aria-label': '外部播放器 HTTP 媒体地址'}" @focus="event => event.target.select?.()" />
       </div>
       <ul v-if="externalMediaUrl && !externalBusy && !externalError" class="play-list">
         <li class="play-item">
