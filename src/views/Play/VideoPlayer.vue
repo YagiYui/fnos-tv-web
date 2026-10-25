@@ -1232,8 +1232,11 @@ async function SendPlayRecord() {
   return progressReporter.submit();
 }
 const progressReporter = createProgressReporter(playbackRecordSnapshot,
-  data => COMMON.requests('POST', '/api/v1/play/record', true, data),
-  () => { if (art) art.notice.show = '播放进度暂未同步，将在下次上报时重试'; });
+  (data, context) => COMMON.requests('POST', '/api/v1/play/record', true, data, {fnosAuthorization: context.authorization}),
+  (error, context) => {
+    if (art && context.account === COMMON.userKey && context.authorization === VueCookies.get('authorization')) art.notice.show = '播放进度暂未同步，将在下次上报时重试';
+  },
+  () => ({account: COMMON.userKey, authorization: VueCookies.get('authorization')}));
 
 async function switchAudio(item) {
   const audioPreferences = preferenceHandle;

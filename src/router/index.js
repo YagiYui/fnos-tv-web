@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import VueCookies from 'vue-cookies';
 const routes = [
     {path:'/watchlist',name:'Watchlist',component:()=>import('../views/Watchlist.vue')},
 
@@ -34,6 +35,12 @@ const router = createRouter({
     // linkActiveClass: 'active',
     scrollBehavior(to, from, savedPosition) {
         return { x: 0, y: 0 }
+    }
+});
+
+router.beforeEach(to => {
+    if (to.path !== '/login' && !VueCookies.get('authorization')) {
+        return {path: '/login', query: typeof to.query.code === 'string' ? {code: to.query.code} : {}};
     }
 });
 
