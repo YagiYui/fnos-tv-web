@@ -26,6 +26,11 @@ export async function loginWithPassword(requests, user) {
   return result;
 }
 
+export function danmakuEpisodeNumber(item) {
+  const number = Number(item?.episode_number);
+  return Number.isInteger(number) && number > 0 ? number : 1;
+}
+
 export function episodeDanmaku(json, episode) {
   if (json?.code !== undefined && json.code !== 0) throw new Error(errorText(json));
   const rows = Array.isArray(json) ? json : json?.[String(episode)] ?? [];

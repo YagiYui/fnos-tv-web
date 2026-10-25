@@ -61,7 +61,7 @@ rejected = assert.rejects(pending, /画质/); api.calls[1].resolve(streams); awa
 const source = fs.readFileSync(new URL('./src/views/Play/VideoPlayer.vue', import.meta.url), 'utf8');
 function player() {
   const api = requestsFixture(), events = [], notices = [];
-  const ctx = {loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController, loadPlayerPreferences() {},
+  const ctx = {sleepTimer:{check(){},state(){return {expired:false}}},loadPlaybackMetadata, primaryMediaFile, chooseAudio, nextEpisode, previousEpisode, AbortController, loadPlayerPreferences() {},
     choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback,
     preferredSubtitleLanguage: {value:''}, preferredQuality: {value:'highest'},
     preferenceSync:{load:async()=>true},cancelDanmakuRequests() {},activeDanmakuSource:{value:''},allMediaStreams: {value: null}, subtitleOffset: {value: 0}, subtitleBottom: {value: 10}, subtitleOutline: {value: 2}, assRenderer: {setOffset(){}}, pgsRenderer: {setOffset(){}}, localSubtitleText: '', localSubtitleName: {value: ''}, recoveryState: {value: null}, recoveryBusy: {value: false}, recoveryRun: 0,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {loginWithPassword, errorText, episodeDanmaku, nextTheme} from './src/compat.js';
+import {loginWithPassword, errorText, episodeDanmaku, danmakuEpisodeNumber, nextTheme} from './src/compat.js';
 
 const user = {username: 'test-fixture', password: 'fixture-密碼%', app_name: 'trimemedia-web'};
 const calls = [];
@@ -40,3 +40,7 @@ assert.throws(() => episodeDanmaku({'1': {}}, 1), /格式异常/);
 assert.equal(nextTheme(false, {name:'dark'}).dark, true);
 assert.equal(nextTheme(true, {name:'dark'}).dark, false);
 console.log('PASS: modern and legacy login, single-attempt errors, valid token, error text and empty danmaku');
+
+assert.equal(danmakuEpisodeNumber({type:'Movie', episode_number:0}),1);
+assert.equal(danmakuEpisodeNumber({episode_number:3}),3);
+assert.equal(danmakuEpisodeNumber({episode_number:-1}),1);

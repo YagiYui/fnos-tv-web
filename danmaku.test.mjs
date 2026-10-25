@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {episodeDanmaku} from './src/compat.js';
+import {episodeDanmaku,danmakuEpisodeNumber} from './src/compat.js';
 const src=fs.readFileSync('./src/views/Play/VideoPlayer.vue','utf8');
 const ref=value=>({value});
 const queue=[];const calls=[];
@@ -9,7 +9,7 @@ const state={episode_guid:ref('episode-one'),guid:ref('season'),playInfo:ref({ep
  danmakuKeyword:ref('Fixture'),danmakuSearchSource:ref('360'),danmakuResults:ref([]),danmakuEpisodes:ref([]),
  danmakuSelectedEpisode:ref(null),danmakuSelectedSource:ref(null),danmakuBusy:ref(false),danmakuSearchDone:ref(false),danmakuSearchError:ref(''),
  danmakuQueryGeneration:0,danmakuRequestController:new AbortController(),danmakuApplyScope:ref('episode'),activeDanmakuSource:ref(''),danmakuLoadGeneration:0,allDanmaku:ref({}),danmuConfig:ref({loadedUntil:0}),lastDanmuLoadedUntil:-1,
- danmuTitleData:ref({}),episodeDanmaku,errorText:e=>e.message,URLSearchParams,
+ danmuTitleData:ref({}),episodeDanmaku,danmakuEpisodeNumber,errorText:e=>e.message,URLSearchParams,
  VueCookies:{get:()=> 'fixture-token'},COMMON:{ShowMsg(){}},getVideoConfig:async()=>{},GetEmoji:async()=>{},
  art:{currentTime:55,layers:{update(){}},plugins:{artplayerPluginDanmuku:{config(){},load:async(...args)=>{queue.push(args)}}}},
  fetch:async(path,options)=>{calls.push([path,options]);return {ok:true,json:async()=>
