@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import * as Vue from 'vue';
 import {parse, compileScript} from 'vue/compiler-sfc';
 import {BrowseSnapshots} from './src/browse-snapshots.js';
-import {imageLoading, rememberImage} from './src/image-loading.js';
+import {imageLoading, rememberImage, imageRetryUrl} from './src/image-loading.js';
 import {mediaDetailTitle, continuePlaybackRoute} from './src/views/Play/player-presentation.js';
 
 // Compile the shipped image component: source is present on its very first render.
@@ -15,11 +15,13 @@ compiled = compiled.replace(/import \{([^}]+)\} from "vue"/g, (_, names) => {
   for (const item of names.split(',')) { const [name, alias = name] = item.trim().split(/\s+as\s+/); bindings[alias] = Vue[name]; }
   return '';
 }).replace(/^import .*$/gm, '').replace('export default', 'globalThis.component =');
-const ctx = vm.createContext({...bindings, imageLoading, rememberImage}); vm.runInContext(compiled, ctx);
+const ctx = vm.createContext({...Vue, ...bindings, onBeforeUnmount() {}, imageLoading, rememberImage, imageRetryUrl}); vm.runInContext(compiled, ctx);
 function renderImage(src, loading = 'lazy') { return ctx.component.setup({src, alt: 'poster', loading})({}, []); }
 let vnode = renderImage('/poster.webp');
 assert.equal(vnode.props.src, '/poster.webp'); assert.equal(vnode.props.loading, 'lazy');
-vnode.props.onLoad({target: {naturalWidth: 300, getAttribute: () => '/poster.webp'}});
+const poster = {naturalWidth: 300, getAttribute: () => '/poster.webp'};
+vnode.ref.r.value = poster;
+vnode.props.onLoad({target: vnode.ref.r.value});
 vnode = renderImage('/poster.webp');
 assert.equal(vnode.props.src, '/poster.webp'); assert.equal(vnode.props.loading, 'eager');
 assert.equal(renderImage('/hero.webp', 'eager').props.loading, 'eager');
@@ -48,7 +50,7 @@ function mountHome() {
   const errors = [], scope = Vue.effectScope();
   const context = vm.createContext({...Vue, AbortController, continuePlaybackRoute,
     useBrowseSnapshots: () => store,
-    inject: key => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : () => {},
+    inject: (key, fallback) => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : fallback,
     useMediaSearch: () => ({state: {query: '', scrollY: 0}, cancel() {}}), useMediaDbData: () => ({list: []}),
     getCurrentInstance: () => ({appContext: {config: {globalProperties: {$COMMON: COMMON}}}}),
     useMessage: () => ({error: error => errors.push(error)}), NIcon: {},

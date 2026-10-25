@@ -15,6 +15,9 @@ export class LibraryViews {
     const saved = this.views.get(library);
     return saved ? copyView(saved) : null;
   }
+  invalidate() {
+    for (const [key, saved] of this.views) this.views.set(key, {...saved, hasData: false, items: [], total: null});
+  }
   save(account, library, state) {
     if (!account || String(account) !== this.account || !library) return;
     this.views.delete(library);

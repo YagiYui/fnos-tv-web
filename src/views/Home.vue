@@ -33,6 +33,14 @@ const keyword = ref(search.query);
 const pageScroll = inject('pageScroll', {getTop: () => window.scrollY, scrollTo: top => window.scrollTo(0, top)});
 const loadHomeLibrary = inject('loadHomeLibrary', () => {});
 const cancelHomeLibraries = inject('cancelHomeLibraries', () => {});
+const mediaChanges = inject('mediaChanges', ref(0));
+const visibleIds = new Set();
+function showLibrary(id) { visibleIds.add(id); return loadHomeLibrary(id); }
+watch(() => mediaChanges.value, () => {
+  if (search.query) void mediaSearch.submit(COMMON.requests, search.query, {preserve: true});
+  else for (const id of visibleIds) void loadHomeLibrary(id, true);
+  void GetPlayList().catch(error => message.error(error?.message || '继续观看加载失败'));
+});
 const searchGroups = computed(() => groupSearchResults(search.items, search.limit));
 const hasMoreSearchResults = computed(() => searchGroups.value.some(group => group.total > group.items.length));
 const visibleLibraries = computed(() => (MediaDbData.list || []).filter(item => item.category !== 'Others'));
@@ -157,7 +165,7 @@ onMounted(async () => {
   // 添加全局点击事件监听
   document.addEventListener('click', handleClickOutside)
   if (search.query) {
-    if (search.status === 'idle') void mediaSearch.submit(COMMON.requests, search.query);
+    if (search.status === 'idle' || search.stale) void mediaSearch.submit(COMMON.requests, search.query, {preserve: true});
   }
   await nextTick();
   pageScroll.scrollTo(search.query ? search.scrollY : savedHome?.scrollY || 0);
@@ -184,6 +192,7 @@ onUnmounted(() => {
       </n-input>
     </div>
     <section v-if="search.query" class="search-results" aria-label="搜索结果" :aria-busy="search.status === 'loading'">
+      <p v-if="search.stale && search.items.length" class="page-description" role="status">正在重新验证状态，暂显示上次搜索结果。</p>
       <div class="section-heading"><h2>“{{ search.query }}” 的搜索结果</h2><n-button text @click="clearSearch">返回首页</n-button></div>
       <p v-if="search.status === 'loading'" role="status">正在搜索…</p>
       <n-alert v-else-if="search.status === 'error'" type="error">{{ search.error }} <n-button text @click="mediaSearch.submit(COMMON.requests, search.query)">重试</n-button></n-alert>
@@ -229,7 +238,7 @@ onUnmounted(() => {
       </template>
       </HomeCarousel>
     </section>
-    <VisibleSection v-for="library in visibleLibraries" :key="library.guid" class="card-shows" :aria-busy="Boolean(MediaDbData.loading?.[library.guid])" @visible="loadHomeLibrary(library.guid)">
+    <VisibleSection v-for="library in visibleLibraries" :key="library.guid" class="card-shows" :aria-busy="Boolean(MediaDbData.loading?.[library.guid])" @visible="showLibrary(library.guid)">
         <div class="section-heading"><h2>{{ library.title }}</h2><router-link :to="libraryRoute(library)" class="section-more">查看全部 <i class="bx bx-chevron-right"></i></router-link></div>
         <n-alert v-if="MediaDbData.errors?.[library.guid]" type="error">{{ MediaDbData.errors[library.guid] }} <n-button text :loading="Boolean(MediaDbData.loading?.[library.guid])" @click="loadHomeLibrary(library.guid, true)">重试</n-button></n-alert>
         <HomeCarousel v-if="filteredItems(library.guid).length" :items="filteredItems(library.guid)" :per-view="per_card" :mobile="isMobile">

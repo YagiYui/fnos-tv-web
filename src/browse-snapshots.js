@@ -10,6 +10,9 @@ export class BrowseSnapshots {
     const value = this.entries.get(key);
     return value ? {...value} : null;
   }
+  invalidateDetails() {
+    for (const key of this.entries.keys()) if (key !== 'home') this.entries.delete(key);
+  }
   save(account, key, value, revision = this.revision) {
     if (!account || String(account) !== this.account || revision !== this.revision) return;
     this.entries.delete(key);

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {ref, computed, reactive, watch, nextTick, effectScope} from 'vue';
 import {mediaDetailTitle} from './src/views/Play/player-presentation.js';
+import {mediaFlag, seasonTargets} from './src/media-actions.js';
 import {BrowseSnapshots} from './src/browse-snapshots.js';
 
 const snapshots = new BrowseSnapshots(); snapshots.setAccount('viewer');
@@ -23,10 +24,10 @@ function mount(id = 'movie', type = 'Movie') {
   const route = reactive({query: {guid: id, gallery_type: type}});
   let mounted, leave, update, unmount;
   const scope = effectScope();
-  const ctx = vm.createContext({ref, computed, watch, nextTick, AbortController, mediaDetailTitle,
+  const ctx = vm.createContext({ref, computed, watch, nextTick, AbortController, mediaDetailTitle, mediaFlag, seasonTargets,
     useBrowseSnapshots: () => snapshots,
     getCurrentInstance: () => ({appContext: {config: {globalProperties: {$COMMON: COMMON, $route: route, $router: {push: value => { destination = value; }}}}}}),
-    inject: () => ({getTop: () => top, scrollTo: value => { top = value; }}),
+    inject: (key, fallback) => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : fallback,
     onBeforeRouteUpdate: cb => { update = cb; }, onBeforeRouteLeave: cb => { leave = cb; },
     onBeforeUnmount: cb => { unmount = cb; }, onMounted: cb => { mounted = cb; }});
   scope.run(() => vm.runInContext(source + ';globalThis.detail={Play,loadDetail,VideoDataInfo,playInfo,SeasonData,PersonList,EpisodeList,loadError};', ctx));

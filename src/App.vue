@@ -7,6 +7,8 @@ import AccountMenu from './components/AccountMenu.vue';
 import {isLibraryActive} from './navigation.js';
 import {applyDocumentTheme, readThemePreference, isDarkTheme, themeModes} from './theme.js';
 import {CatalogCache} from './catalog-cache.js';
+import {MediaActions} from './media-actions.js';
+import {invalidateMediaCaches} from './media-state-cache.js';
 
 import {useMediaDbData, useMediaSearch, useLibraryViews, useBrowseSnapshots} from './store.js'
 import {useRoute} from "vue-router";
@@ -34,6 +36,18 @@ provide('cancelHomeLibraries', () => catalogCache.cancel());
 // 获取 Vue 实例
 const instance = getCurrentInstance();
 const COMMON = instance.appContext.config.globalProperties.$COMMON;
+const mediaChanges = ref(0);
+const mediaActions = new MediaActions({requests: (...args) => COMMON.requests(...args), onInvalidate: invalidateMediaState});
+provide('mediaActions', mediaActions);
+provide('mediaChanges', mediaChanges);
+onBeforeUnmount(() => mediaActions.setAccount(''));
+function invalidateMediaState(event) {
+  if (invalidateMediaCaches(event, {account: initializedAccount, revision: mediaActions.revision,
+    catalogCache, homeLoads, media: MediaDbData, libraryViews, browseSnapshots, mediaSearch})) {
+    metadataUpdated = 0;
+    mediaChanges.value++;
+  }
+}
 let UserInfo = ref({})
 const avatarName = computed(() => String(UserInfo.value?.username || '').trim());
 const serviceVersion = ref('');
@@ -62,7 +76,7 @@ const MediaDbSum = ref({})
 const MediaDbInfo = ref({})
 const ConfigData = ref({})
 const route = useRoute();
-const pageLabel = computed(() => ({'/': '首页', '/list': data.value?.find(item => item.guid === route.query.gallery_uid)?.title || '媒体库', '/video': '影片详情', '/player': '正在播放'})[route.path] || '片库');
+const pageLabel = computed(() => ({'/': '首页', '/list': route.query.scope === 'favorites' ? '收藏' : data.value?.find(item => item.guid === route.query.gallery_uid)?.title || '媒体库', '/video': '影片详情', '/player': '正在播放'})[route.path] || '片库');
 const themeOverrides = computed(() => ({common: {primaryColor: dark.value ? '#83b0f1' : '#3978d4', primaryColorHover: dark.value ? '#a4c6f5' : '#4f88da', primaryColorPressed: dark.value ? '#6598dc' : '#2866bb', borderRadius: '8px'}}));
 
 if (COMMON.isMo) {
@@ -190,6 +204,7 @@ function handleSelect(key) {
     mediaSearch.setAccount('');
     libraryViews.setAccount('');
     browseSnapshots.setAccount('');
+    mediaActions.setAccount('');
     initializedAccount = null;
     catalogCache.clear();
     homeLoads.clear();
@@ -229,6 +244,7 @@ async function onMountedFun() {
       mediaSearch.setAccount(account);
       libraryViews.setAccount(account);
       browseSnapshots.setAccount(account);
+      mediaActions.setAccount(account);
       const accountChanged = account !== initializedAccount;
       if (accountChanged) {
         catalogCache.clear();
@@ -267,6 +283,7 @@ watch(
         mediaSearch.setAccount('');
         libraryViews.setAccount('');
         browseSnapshots.setAccount('');
+        mediaActions.setAccount('');
         delete COMMON.userKey;
         catalogCache.clear(); initializedAccount = null;
         homeLoads.clear();
@@ -337,15 +354,7 @@ watch(
                           <span class="title">首页</span>
                         </router-link>
                       </li>
-                      <!--                      <li>-->
-                      <!--                        <router-link to="/star">-->
-                      <!--                                                    <span class="icon">-->
-                      <!--                                                        <i class='bx bx-star'></i>-->
-
-                      <!--                                                    </span>-->
-                      <!--                          <span class="title">收藏</span>-->
-                      <!--                        </router-link>-->
-                      <!--                      </li>-->
+                      <li><router-link to="/list?scope=favorites" active-class="" exact-active-class="" @click="isMobile && (collapsed = true)" :class="{'library-active': route.path === '/list' && route.query.scope === 'favorites'}"><span class="icon"><i class="bx bx-star"></i></span><span class="title">收藏</span></router-link></li>
                     </ul>
                   </div>
                 </div>

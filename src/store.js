@@ -9,14 +9,14 @@ export const useBrowseSnapshots = defineStore('BrowseSnapshots', () => {
     const snapshots = new BrowseSnapshots();
     const revision = ref(0);
     return {revision, setAccount: value => { snapshots.setAccount(value); revision.value = snapshots.revision; },
-        get: (user, key) => snapshots.get(user, key), save: (user, key, value, version) => snapshots.save(user, key, value, version)};
+        invalidateDetails: () => snapshots.invalidateDetails(), get: (user, key) => snapshots.get(user, key), save: (user, key, value, version) => snapshots.save(user, key, value, version)};
 })
 
 export const useLibraryViews = defineStore('LibraryViews', () => {
     const views = new LibraryViews();
     const account = ref('');
     return {account, setAccount: value => { views.setAccount(value); account.value = views.account; },
-        get: (user, library) => views.get(user, library), save: (user, library, state) => views.save(user, library, state)};
+        invalidate: () => views.invalidate(), get: (user, library) => views.get(user, library), save: (user, library, state) => views.save(user, library, state)};
 })
 
 export const useMediaSearch = defineStore('MediaSearch', () => {
@@ -25,7 +25,7 @@ export const useMediaSearch = defineStore('MediaSearch', () => {
     try { storage = window.localStorage; } catch { /* History is optional. */ }
     const search = new MediaSearch({state, storage});
     return {state, setAccount: account => search.setAccount(account),
-        submit: (requests, query) => search.submit(requests, query), cancel: () => search.cancel(),
+        invalidate: () => search.invalidate(), submit: (requests, query, options) => search.submit(requests, query, options), cancel: () => search.cancel(),
         clear: () => search.clear(), clearHistory: () => search.clearHistory(), showMore: () => search.showMore()};
 })
 

@@ -3,17 +3,19 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {ref, computed, watch, reactive, nextTick, effectScope} from 'vue';
 import {LibraryViews} from './src/library-views.js';
+import {listFavoriteMedia} from './src/media-actions.js';
+import {libraryViewKey} from './src/navigation.js';
 import * as catalogFilters from './src/catalog-filters.js';
 
 const source = fs.readFileSync(new URL('./src/views/Video/VideoList.vue', import.meta.url), 'utf8')
   .split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm, '');
 const views = new LibraryViews(); views.setAccount('viewer-one');
-const calls = [], totals = {movies: 98, tv: 70};
+const calls = [], totals = {movies: 98, tv: 70, '@favorites': 98};
 let failure = false, deferred = null, metadataDeferred = null, top = 0;
 function rows(payload) {
-  const total = payload.tags?.watched === '0' ? 65 : totals[payload.ancestor_guid];
+  const total = payload.tags?.watched === '0' ? 65 : totals[payload.ancestor_guid || '@favorites'];
   return {total, list: Array.from({length: Math.max(0, Math.min(48, total - (payload.page - 1) * 48))},
-    (_, i) => ({guid: `${payload.ancestor_guid}-${payload.page}-${i}`}))};
+    (_, i) => ({guid: `${payload.ancestor_guid || 'favorites'}-${payload.page}-${i}`}))};
 }
 const COMMON = {userKey: 'viewer-one', async requests(method, uri, auth, payload, options) {
   calls.push({uri, payload: {...payload}, signal: options.signal});
@@ -29,18 +31,19 @@ const COMMON = {userKey: 'viewer-one', async requests(method, uri, auth, payload
 const settle = async () => { await nextTick(); await new Promise(setImmediate); };
 function mount(gallery = 'movies') {
   let mounted, leaving, changing, unmounting;
-  const route = reactive({query: {gallery_uid: gallery}});
+  const route = reactive({query: gallery === '@favorites' ? {scope: 'favorites'} : {gallery_uid: gallery}});
+  const changes = ref(0);
   const scope = effectScope();
-  const context = vm.createContext({ref, computed, watch, nextTick, AbortController, ...catalogFilters,
+  const context = vm.createContext({ref, computed, watch, nextTick, AbortController, listFavoriteMedia, libraryViewKey, ...catalogFilters,
     useMediaDbData: () => ({list: []}), useLibraryViews: () => views,
-    inject: () => ({getTop: () => top, scrollTo: value => { top = value; }}),
+    inject: (key, fallback) => key === 'pageScroll' ? {getTop: () => top, scrollTo: value => { top = value; }} : key === 'mediaChanges' ? changes : fallback,
     getCurrentInstance: () => ({appContext: {config: {globalProperties: {$COMMON: COMMON, $route: route}}}}),
     onMounted: cb => { mounted = cb; }, onBeforeRouteLeave: cb => { leaving = cb; },
     onBeforeRouteUpdate: cb => { changing = cb; }, onBeforeUnmount: cb => { unmounting = cb; }});
   scope.run(() => vm.runInContext(source + ';globalThis.pager={page,mode,order,MediaDbInfo,NextPage,BackPage,GetMediaDbInfos,listLoading,listError,hasNextPage,openSort,closeSort,applyFilters,resetDraft,filters,draftFilters,draftMode,draftOrder,filterOptions,filterOptionsError,filterOptionsLoading,filterSummary,filterCount,resultsMatch};', context));
-  return {p: context.pager, mounted: () => mounted(), leave: () => leaving(),
+  return {p: context.pager, changes, mounted: () => mounted(), leave: () => leaving(),
     unmount: () => { unmounting(); scope.stop(); },
-    change: async gallery => { changing({query: {gallery_uid: gallery}}); top = 0; route.query.gallery_uid = gallery; await settle(); }};
+    change: async gallery => { const query = gallery === '@favorites' ? {scope: 'favorites'} : {gallery_uid: gallery}; changing({query}); top = 0; route.query = query; await settle(); }};
 }
 let view = mount(), p = view.p;
 await view.mounted(); assert.equal(p.page.value, 1);
@@ -155,4 +158,28 @@ assert.match(p.filterOptionsError.value, /metadata failure/); assert.equal(p.fil
 p.closeSort(); view.leave(); view.unmount();
 const saved = views.get('viewer-one', 'movies'); saved.filters.watched = '0';
 assert.equal(views.get('viewer-one', 'movies').filters.watched, '1', 'Draft edits cannot mutate cached state');
+// Favorites reuse the list flow without leaking its internal scope key to the server.
+view = mount('@favorites'); p = view.p; await view.mounted();
+assert.equal(calls.at(-1).uri, '/api/v1/favorite/list');
+assert.equal(Object.hasOwn(calls.at(-1).payload, 'ancestor_guid'), false);
+await p.NextPage(); top = 710; view.leave(); view.unmount();
+view = mount('@favorites'); p = view.p; await view.mounted();
+assert.equal(p.page.value, 2); assert.equal(top, 710);
+p.openSort(); await settle();
+const metadata = calls.findLast(call => call.uri.startsWith('/api/v1/tag/list?'));
+assert.match(metadata.uri, /is_favorite=1/); assert.doesNotMatch(metadata.uri, /ancestor_guid/);
+p.draftFilters.value.watched = '1'; await p.applyFilters();
+assert.equal(calls.at(-1).payload.tags.watched, '1'); assert.equal(p.page.value, 1);
+await view.change('movies'); assert.equal(p.filters.value.watched, '1');
+await view.change('@favorites'); assert.equal(p.filters.value.watched, '1');
+deferred = new Promise(resolve => { finish = resolve; });
+const oldFavorite = p.GetMediaDbInfos(2); const oldFavoriteSignal = calls.at(-1).signal;
+views.invalidate(); view.changes.value++; await settle();
+assert.equal(oldFavoriteSignal.aborted, true);
+finish({total: 98, list: [{guid: 'old-favorite'}]}); await oldFavorite;
+assert.notEqual(p.MediaDbInfo.value[0].guid, 'old-favorite'); assert.equal(p.resultsMatch.value, true);
+await p.NextPage(); totals['@favorites'] = 10;
+views.invalidate(); view.changes.value++; await settle(); await settle();
+assert.equal(p.page.value, 1); assert.equal(p.MediaDbInfo.value.length, 10);
+view.leave(); view.unmount();
 console.log('PASS: actual pagination and filter handlers, batched apply, cancel/reset drafts, official payloads, query-aware failure retry, condition/page/scroll restoration, metadata abort/stale guards and per-library account memory');

@@ -20,6 +20,7 @@ const COMMON = {requests: async (method, uri, auth, payload, options) => {
 const search = {state: {query: ''}, setAccount() {}};
 const context = vm.createContext({ref, COMMON, data, MediaDbData: media, initializedAccount: null,
   catalogCache: cache, homeLoads: new Map(), mediaSearch: search, libraryViews: new LibraryViews(),
+  mediaActions: {setAccount() {}},
   browseSnapshots: new BrowseSnapshots(),
   route: {path: '/'}, UserInfo: ref({guid: 'viewer-one'}), VueCookies: {get: () => true}, MediaDbSum: ref({}),
   title: ref('示例服务器'), document: {title: ''}, initialization: null, metadataUpdated: 0, load: ref(true),
