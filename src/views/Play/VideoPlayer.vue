@@ -27,7 +27,8 @@ import {createPlayerPreferenceStore, PLAYER_PREFERENCE_DEFAULTS} from './player-
 import {PreferenceSync} from '../../preference-sync.js';
 import {personalRequest} from '../../personal-api.js';
 import {GESTURE_HOLD_RATES} from './gesture-settings.js';
-import {createSleepTimer, pictureInPictureAvailable, togglePictureInPicture} from './sleep-timer.js';
+import {createSleepTimer} from './sleep-timer.js';
+import {captionPictureInPictureAvailable, installCaptionPictureInPicture} from './caption-picture-in-picture.js';
 import {groupPlayerSettings, installPictureInPictureOverlays} from './player-settings.js';
 import {QUALITY_PREFERENCES, choosePreferredSubtitle, choosePreferredQuality, qualityPreferenceFallback, subtitleLanguageChoices, subtitleLanguageLabel} from './media-preferences.js';
 import {useBrowseSnapshots} from '../../store.js';
@@ -95,6 +96,7 @@ function applySleepTimer() {
   sleepTimer.set(sleepChoice.value); autoplayCountdown.cancel(); showSleepTimer.value = false;
 }
 function leavePictureInPicture() {
+  art?.fnosCaptionPiP?.close();
   if (document.pictureInPictureElement === art?.video) void document.exitPictureInPicture().catch(()=>{});
 }
 let autoplayPanel = null, autoplayText = null;
@@ -1680,10 +1682,8 @@ async function UpdateControl(_art) {
   });
   await addArtConfig(_art, 'setting', {name:'睡眠定时',html:'睡眠定时',tooltip:sleepStatus.value,
     onClick:()=>{ if(controlsCurrent()) {showSleepTimer.value=true;_art.setting.show=false;} }});
-  if (pictureInPictureAvailable(_art.video, document)) {
-    await addArtConfig(_art, 'setting', {name:'画中画',html:'进入 / 退出画中画',tooltip:'仅视频画面，不含网页字幕与弹幕',
-      onClick:()=>{ if(controlsCurrent()) void togglePictureInPicture(_art.video,document).catch(()=>COMMON.ShowMsg('浏览器未能进入画中画，请检查权限或退出全屏后重试')); }});
-  }
+  await addArtConfig(_art, 'setting', {name:'画中画',html:'画中画（含字幕）',tooltip:captionPictureInPictureAvailable() ? '保留当前字幕与弹幕' : '需桌面版 Edge／Chrome 支持',
+    onClick:()=>{ if(controlsCurrent()) void _art.fnosCaptionPiP?.toggle().catch(error=>COMMON.ShowMsg(errorText(error) || '请退出全屏后重试画中画')); }});
   await addArtConfig(_art, 'setting', {
     name: 'ASS特效字幕', html: 'ASS 特效字幕', tooltip: useAssSubtitles.value ? '原始样式' : '普通字幕',
     switch: useAssSubtitles.value,
@@ -2120,6 +2120,7 @@ const dynamicInputCreateByUrl = () => {
 
 async function getInstance(_art) {
   installPictureInPictureOverlays(_art);
+  installCaptionPictureInPicture(_art);
   const gestureOwner = preferenceHandle;
   autoplayCountdown.cancel();
   autoplayPanel = null;

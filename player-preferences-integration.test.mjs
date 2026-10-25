@@ -24,7 +24,7 @@ const makePlayer = () => ({playbackRate: 1, currentTime: 12, video: {paused: tru
   layers: {update() {}}, plugins: {artplayerPluginDanmuku: {reset() {}}}, pause() {events.push('pause');}});
 const disposeGestures = () => events.push('dispose-gestures');
 disposeGestures.refresh = () => events.push('refresh-gestures');
-const ctx = vm.createContext({sleepTimer:{cancel(){}},showSleepTimer:ref(false),sleepStatus:ref('未启用'),leavePictureInPicture(){},canEditSharedConfig:ref(false),pictureInPictureAvailable:()=>false,document:{},ref, shallowRef: ref, useBrowseSnapshots: () => account, GESTURE_HOLD_RATES,
+const ctx = vm.createContext({sleepTimer:{cancel(){}},showSleepTimer:ref(false),sleepStatus:ref('未启用'),leavePictureInPicture(){},canEditSharedConfig:ref(false),pictureInPictureAvailable:()=>false,captionPictureInPictureAvailable:()=>false,document:{},ref, shallowRef: ref, useBrowseSnapshots: () => account, GESTURE_HOLD_RATES,
   PLAYER_PREFERENCE_DEFAULTS,PreferenceSync:class{save(){return Promise.resolve(true)}reset(){return Promise.resolve(true)}dispose(){}load(){return Promise.resolve(true)}},QUALITY_PREFERENCES, subtitleLanguageChoices, subtitleLanguageLabel,
   externalChoices: externalPlayerChoices('Windows'), effectiveExternalPlayer: ref(''), preferredExternalLabel: ref('每次选择'),
   showDanmakuSources:ref(false),danmakuSourceConfig:ref(null),cancelDanmakuRequests(){},activeDanmakuSourceName:ref('来源'),showMediaFiles: ref(false), showDiagnostics: ref(false), diagnosticText: ref(''), allMediaStreams: ref(null), localSubtitleText: '', localSubtitleName: ref(''), selectedMediaLabel: ref('文件'), subtitleOffset: ref(0), subtitleBottom: ref(10), subtitleOutline: ref(2), showModal: ref(false), externalMediaUrl: ref(''),
