@@ -3,7 +3,6 @@
 </template>
 
 <script>
-var instance = null;
 import Artplayer from 'artplayer';
 
 export default {
@@ -19,17 +18,20 @@ export default {
     },
   },
   mounted() {
-    instance = new Artplayer({
+    const instance = new Artplayer({
       ...this.option,
       container: this.$refs.artRef,
     }, function onReady(art) {
       this.play()
     },);
+    this._playerInstance = instance;
     this.$nextTick(() => {
-      this.$emit('get-instance', instance);
+      if (this._playerInstance === instance) this.$emit('get-instance', instance);
     });
   },
   beforeUnmount() {
+    const instance = this._playerInstance;
+    this._playerInstance = null;
     if (instance && instance.destroy) {
       instance.destroy(false);
     }

@@ -1,0 +1,17 @@
+const sessions = new WeakMap();
+const bound = new WeakSet();
+export function releaseMediaEngine(player) {
+  const engine = sessions.get(player);
+  sessions.delete(player);
+  if (engine) engine.destroy();
+}
+export function replaceMediaEngine(player, create) {
+  releaseMediaEngine(player);
+  if (!bound.has(player)) {
+    player.on('destroy', () => releaseMediaEngine(player));
+    bound.add(player);
+  }
+  const engine = create();
+  sessions.set(player, engine);
+  return engine;
+}

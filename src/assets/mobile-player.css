@@ -71,3 +71,39 @@
   opacity:0!important;visibility:hidden!important;pointer-events:none!important;
 }
 .art-video-player.fnos-desktop-idle {cursor:none!important}
+
+/* Transport and utility actions share the site's quiet, icon-based styling. */
+.art-back-button {display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent}
+.art-back-button svg {flex:none}
+/* ArtPlayer sets fill on every SVG: open strokes otherwise become filled wedges. */
+svg.fnos-line-icon,svg.fnos-line-icon path {fill:none!important;stroke:currentColor;stroke-width:1.6;stroke-linecap:butt;stroke-linejoin:miter}
+.art-back-button,.art-control-mobile-fullscreen {box-shadow:none!important;filter:none!important;text-shadow:none!important;background:transparent!important;border:0!important;transform:none!important}
+.art-back-button svg,.art-control-mobile-fullscreen svg,.art-control-fullscreen svg {display:block;box-shadow:none!important;filter:none!important;transform:none!important}
+.art-control-mobile-fullscreen {display:inline-flex!important;align-items:center;justify-content:center}
+.player-loading-shell {position:relative;min-height:calc(100dvh - 120px)}
+.player-loading-back {position:absolute;top:16px;left:16px;color:var(--cinema-text,#fff);z-index:2}
+.fnos-touch-player .art-back-button {padding:0;border:0;background:transparent}
+.fnos-touch-player .art-player-heading .art-title {max-width:calc(100% - 52px);background:transparent;padding:4px 0;text-shadow:0 1px 4px #000}
+.fnos-touch-player .art-layer-title {right:116px!important}
+.fnos-touch-player .art-layer-mobile-danmaku {right:max(12px,env(safe-area-inset-right))}
+.fnos-touch-player .fnos-danmaku-tools {gap:4px}
+.fnos-touch-player .fnos-danmaku-tools>button {display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent}
+.fnos-touch-player .fnos-danmaku-tools>button:hover,.fnos-touch-player .art-back-button:hover {background:#ffffff20}
+.fnos-touch-player .fnos-danmaku-tools>button[aria-pressed="false"] {opacity:.5}
+.fnos-touch-player .art-control-setting,.fnos-touch-player .art-control-字幕 {display:none!important}
+.fnos-touch-player:not(.fnos-mobile-fullscreen) .art-control-画质,
+.fnos-touch-player:not(.fnos-mobile-fullscreen) .art-control-选集 {display:none!important}
+.fnos-touch-player.fnos-mobile-fullscreen .art-controls-right {gap:4px}
+.fnos-touch-player .art-control-画质,.fnos-touch-player .art-control-选集 {max-width:82px;padding:0 6px!important}
+.fnos-touch-player .art-control-画质 {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fnos-touch-player.fnos-mobile-fullscreen {touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.fnos-touch-player .art-notice {top:64px!important;left:50%!important;right:auto!important;width:max-content;transform:translateX(-50%);max-width:80%;justify-content:center;pointer-events:none}
+.fnos-gesture-hud {position:absolute;z-index:150;top:50%;left:50%;transform:translate(-50%,-50%);max-width:80%;padding:12px 18px;border-radius:12px;background:#111c;color:#fff;font-size:15px;line-height:1.5;text-align:center;pointer-events:none;font-variant-numeric:tabular-nums;box-shadow:0 4px 20px #0003}
+.fnos-gesture-hud[hidden] {display:none!important}
+@media (max-height:400px) {
+  .fnos-touch-player.fnos-mobile-fullscreen .art-controls .art-control {min-height:40px;height:40px}
+}
+@media (max-width:540px) {
+  /* Portrait videos keep secondary actions in Settings when the row is narrow. */
+  .fnos-touch-player.fnos-mobile-fullscreen:not(.fnos-landscape-rotated) .art-control-画质 {display:none!important}
+}
