@@ -4,6 +4,7 @@ import MediaImage from "../../components/MediaImage.vue";
 import {getCurrentInstance, onMounted, onBeforeUnmount, ref, computed, watch, inject, nextTick} from "vue";
 import {useMediaDbData, useLibraryViews} from '@/store.js'
 import {onBeforeRouteUpdate, onBeforeRouteLeave} from "vue-router";
+import {emptyCatalogFilters, normalizeCatalogFilters, catalogTags, catalogTypeOptions, catalogFilterCount, catalogFilterSummary, loadCatalogFilterOptions, watchedOptions} from '../../catalog-filters.js';
 
 const MediaDbData = useMediaDbData()
 const libraryViews = useLibraryViews();
@@ -26,6 +27,25 @@ const order = computed({
   }
 });
 const showSort = ref(false);
+const filters = ref(emptyCatalogFilters());
+const draftFilters = ref(emptyCatalogFilters());
+const draftMode = ref('create_time');
+const draftOrder = ref('DESC');
+const filterOptions = ref({genres: [], decades: []});
+const filterOptionsLoading = ref(false);
+const filterOptionsError = ref('');
+let optionsController = null;
+let optionsGeneration = 0;
+let requestedPage = 1;
+const libraryCategory = computed(() => MediaDbData.list?.find(item => item.guid === guid.value)?.category || proxy.$route.query.gallery_type);
+const typeOptions = computed(() => catalogTypeOptions(libraryCategory.value));
+const filterCount = computed(() => catalogFilterCount(filters.value));
+const filterSummary = computed(() => catalogFilterSummary(filters.value, filterOptions.value));
+const genreOptions = computed(() => {
+  const selected = draftFilters.value.genres;
+  return selected === null || filterOptions.value.genres.some(item => item.value === selected) ? filterOptions.value.genres
+    : [{value: selected, label: `已选题材 #${selected}`}, ...filterOptions.value.genres];
+});
 const size = ref(48);
 const page = ref(1);
 const MediaDbInfo = ref([]);
@@ -36,8 +56,9 @@ let listGeneration = 0;
 let controller = null;
 let applyingView = false;
 let viewGeneration = 0;
-let resultKey = '';
+const resultKey = ref('');
 let viewAccount = null;
+const resultsMatch = computed(() => resultKey.value === queryKey());
 const hasNextPage = computed(() => total.value !== null ? page.value * size.value < total.value : MediaDbInfo.value.length === size.value);
 const totalPages = computed(() => total.value !== null ? Math.max(1, Math.ceil(total.value / size.value)) : null);
 
@@ -78,7 +99,44 @@ const orders = [
 ]
 
 
-function queryKey() { return JSON.stringify([guid.value, mode.value, order.value, page.value]); }
+function queryKey() { return JSON.stringify([guid.value, mode.value, order.value, page.value, normalizeCatalogFilters(filters.value)]); }
+function cancelFilterOptions() { optionsGeneration++; optionsController?.abort(); optionsController = null; filterOptionsLoading.value = false; }
+async function getFilterOptions() {
+  cancelFilterOptions();
+  const generation = optionsGeneration;
+  const id = guid.value, account = viewAccount;
+  const requestController = optionsController = new AbortController();
+  const current = () => generation === optionsGeneration && !requestController.signal.aborted && id === guid.value && account === COMMON.userKey && account === viewAccount;
+  filterOptionsLoading.value = true; filterOptionsError.value = '';
+  try {
+    const result = await loadCatalogFilterOptions(COMMON.requests, id, libraryCategory.value, requestController.signal);
+    if (!current()) return;
+    filterOptions.value = {genres: result.genres, decades: result.decades};
+    filterOptionsError.value = result.warning;
+  } catch (error) { if (current()) filterOptionsError.value = error?.message || '筛选选项加载失败，请重试'; }
+  finally { if (current()) { filterOptionsLoading.value = false; optionsController = null; } }
+}
+function openSort() {
+  draftFilters.value = normalizeCatalogFilters(filters.value);
+  draftMode.value = mode.value; draftOrder.value = order.value;
+  showSort.value = true;
+  void getFilterOptions();
+}
+function closeSort() { showSort.value = false; cancelFilterOptions(); }
+function resetDraft() { draftFilters.value = emptyCatalogFilters(); draftMode.value = 'create_time'; draftOrder.value = 'DESC'; }
+async function applyFilters() {
+  const generation = viewGeneration;
+  cancelPending();
+  applyingView = true;
+  filters.value = normalizeCatalogFilters(draftFilters.value);
+  mode.value = modes.some(item => item.value === draftMode.value) ? draftMode.value : 'create_time';
+  order.value = ['ASC', 'DESC'].includes(draftOrder.value) ? draftOrder.value : 'DESC';
+  closeSort();
+  await nextTick();
+  if (generation !== viewGeneration) return;
+  applyingView = false;
+  await GetMediaDbInfos(1);
+}
 function cancelPending() {
   listGeneration++;
   controller?.abort();
@@ -86,25 +144,31 @@ function cancelPending() {
   listLoading.value = false;
 }
 function saveView() {
-  const hasData = resultKey === queryKey();
+  const hasData = resultKey.value === queryKey();
   libraryViews.save(viewAccount, guid.value, {mode: mode.value, order: order.value,
+    filters: normalizeCatalogFilters(filters.value), filterOptions: filterOptions.value,
     page: hasData ? page.value : 1, size: size.value, total: hasData ? total.value : null,
     items: hasData ? MediaDbInfo.value : [], hasData, scrollY: hasData ? pageScroll.getTop() : 0});
 }
 async function loadLibrary(id) {
   const generation = ++viewGeneration;
   cancelPending();
+  closeSort();
   viewAccount = COMMON.userKey;
   guid.value = typeof id === 'string' ? id : '';
-  if (!guid.value) { MediaDbInfo.value = []; resultKey = ''; listError.value = '请选择有效的媒体库'; return; }
+  if (!guid.value) { MediaDbInfo.value = []; resultKey.value = ''; listError.value = '请选择有效的媒体库'; return; }
   const saved = libraryViews.get(viewAccount, guid.value);
   applyingView = true;
   mode.value = saved?.mode || 'create_time';
   order.value = saved?.order || 'DESC';
+  filters.value = normalizeCatalogFilters(saved?.filters);
+  filterOptions.value = saved?.filterOptions || {genres: [], decades: []};
+  filterOptionsError.value = '';
   page.value = saved?.page || 1;
+  requestedPage = page.value;
   MediaDbInfo.value = saved?.items || [];
   total.value = saved?.total ?? null;
-  resultKey = saved?.hasData ? queryKey() : '';
+  resultKey.value = saved?.hasData ? queryKey() : '';
   listLoading.value = true;
   await nextTick();
   if (generation !== viewGeneration) return;
@@ -113,7 +177,7 @@ async function loadLibrary(id) {
   // Revalidate the saved page, keeping a restored page usable during a slow refresh.
   await GetMediaDbInfos(page.value, saved?.hasData ? {preserveScroll: true} : {scrollTop: saved?.scrollY || 0});
 }
-async function GetMediaDbInfos(targetPage = page.value, {preserveScroll = false, scrollTop = 0} = {}) {
+async function GetMediaDbInfos(targetPage = requestedPage, {preserveScroll = false, scrollTop = 0} = {}) {
   controller?.abort();
   const requestController = controller = new AbortController();
   const account = COMMON.userKey;
@@ -121,9 +185,10 @@ async function GetMediaDbInfos(targetPage = page.value, {preserveScroll = false,
   const isCurrent = () => generation === listGeneration && !requestController.signal.aborted && account === COMMON.userKey && account === viewAccount;
   listLoading.value = true;
   listError.value = '';
+  requestedPage = targetPage;
   const request = {
     ancestor_guid: guid.value,
-    tags: {type: ['Movie', 'TV', 'Directory', 'Video']},
+    tags: catalogTags(filters.value),
     exclude_grouped_video: 1,
     page: targetPage,
     page_size: size.value,
@@ -148,7 +213,7 @@ async function GetMediaDbInfos(targetPage = page.value, {preserveScroll = false,
     MediaDbInfo.value = res.list;
     page.value = targetPage;
     total.value = knownTotal;
-    resultKey = queryKey();
+    resultKey.value = queryKey();
     if (!preserveScroll) {
       await nextTick();
       if (isCurrent()) pageScroll.scrollTo(scrollTop);
@@ -160,20 +225,20 @@ async function GetMediaDbInfos(targetPage = page.value, {preserveScroll = false,
   }
 }
 async function BackPage() {
-  if (listLoading.value || page.value <= 1) return;
+  if (listLoading.value || !resultsMatch.value || page.value <= 1) return;
   await GetMediaDbInfos(page.value - 1);
 }
 async function NextPage() {
-  if (listLoading.value || !hasNextPage.value) return;
+  if (listLoading.value || !resultsMatch.value || !hasNextPage.value) return;
   await GetMediaDbInfos(page.value + 1);
 }
-watch([mode, order], () => { if (!applyingView) void GetMediaDbInfos(1); });
+watch([mode, order, () => JSON.stringify(filters.value)], () => { if (!applyingView) void GetMediaDbInfos(1); });
 onBeforeRouteUpdate(to => {
-  if (to.query.gallery_uid !== guid.value) { saveView(); viewGeneration++; cancelPending(); }
+  if (to.query.gallery_uid !== guid.value) { saveView(); viewGeneration++; cancelPending(); closeSort(); }
 });
 watch(() => proxy.$route.query.gallery_uid, id => { void loadLibrary(id); });
-onBeforeRouteLeave(() => { saveView(); viewGeneration++; cancelPending(); });
-onBeforeUnmount(() => { viewGeneration++; cancelPending(); });
+onBeforeRouteLeave(() => { saveView(); viewGeneration++; cancelPending(); closeSort(); });
+onBeforeUnmount(() => { viewGeneration++; cancelPending(); cancelFilterOptions(); });
 onMounted(async () => { await loadLibrary(proxy.$route.query.gallery_uid); });
 </script>
 
@@ -183,11 +248,13 @@ onMounted(async () => { await loadLibrary(proxy.$route.query.gallery_uid); });
     <div class="library-toolbar list-toolbar">
       <div><h1>{{ libraryTitle }}</h1><p class="page-description"><span v-if="total !== null">{{ total }} 部影片 · </span>第 {{ page }} 页<span v-if="totalPages"> / 共 {{ totalPages }} 页</span><span v-if="listLoading"> · 加载中</span></p></div>
       <div class="catalog-actions">
-        <n-button @click="showSort = !showSort" secondary><template #icon><i class="bx bx-sort-alt-2"></i></template>排序</n-button>
-        <n-button @click="BackPage()" :disabled="listLoading || page <= 1" aria-label="上一页" title="上一页" secondary circle><i class="bx bx-chevron-left"></i></n-button>
-        <n-button @click="NextPage()" :disabled="listLoading || !hasNextPage" aria-label="下一页" title="下一页" secondary circle><i class="bx bx-chevron-right"></i></n-button>
+        <n-button @click="openSort" secondary><template #icon><i class="bx bx-sort-alt-2"></i></template>筛选与排序<span v-if="filterCount">（{{ filterCount }}）</span></n-button>
+        <n-button @click="BackPage()" :disabled="listLoading || !resultsMatch || page <= 1" aria-label="上一页" title="上一页" secondary circle><i class="bx bx-chevron-left"></i></n-button>
+        <n-button @click="NextPage()" :disabled="listLoading || !resultsMatch || !hasNextPage" aria-label="下一页" title="下一页" secondary circle><i class="bx bx-chevron-right"></i></n-button>
       </div>
     </div>
+    <p v-if="filterCount" class="page-description" aria-label="已应用筛选">筛选：{{ filterSummary }}</p>
+    <p v-if="MediaDbInfo.length && !resultsMatch" class="page-description" role="status">{{ listLoading ? '正在应用新条件，暂显示上次结果…' : '新条件尚未加载成功，当前显示上次结果；请重试或调整条件。' }}</p>
     <n-alert v-if="listError" type="error" style="margin-bottom: 16px">{{ listError }} <n-button text @click="GetMediaDbInfos()">重试</n-button></n-alert>
     <div class="card-show-content view-card-list" :aria-busy="listLoading">
       <div class="view-item poster-card" v-for="item in MediaDbInfo" :key="item.guid">
@@ -204,44 +271,32 @@ onMounted(async () => { await loadLibrary(proxy.$route.query.gallery_uid); });
         </router-link>
       </div>
     </div>
-    <n-empty v-if="!listLoading && !listError && !MediaDbInfo.length" description="当前媒体库暂无影片" class="catalog-empty" />
-    <nav class="catalog-pagination" aria-label="列表翻页"><n-button @click="BackPage()" :disabled="listLoading || page <= 1" secondary>上一页</n-button><span>第 {{ page }} 页<span v-if="totalPages"> / {{ totalPages }}</span></span><n-button @click="NextPage()" :disabled="listLoading || !hasNextPage" secondary>下一页</n-button></nav>
-    <n-modal v-model:show="showSort" transform-origin="center">
-      <n-card style="width: 600px;" title="排序" :bordered="false" size="huge" role="dialog" aria-modal="true">
-        <template #header-extra>
-          <n-button @click="showSort = !showSort" strong secondary circle>
-            <i class='bx bx-x'></i>
-          </n-button>
-        </template>
-        <div class="sort-list">
-          <div class="sort-title">
-            排序方式
-          </div>
-          <div class="sort-list">
-            <n-radio-group v-model:value="mode" name="radiogroup">
-              <n-space vertical>
-                <n-radio class="sort-item" v-for="item in modes"
-                         :checked="mode === item.value" :key="item.value" :value="item.value">
-                  {{ item.label }}
-                </n-radio>
-              </n-space>
-            </n-radio-group>
-          </div>
-          <div class="sort-title">
-            排序顺序
-          </div>
-          <div class="sort-list">
-            <n-radio-group v-model:value="order" name="radiogroup">
-              <n-space vertical>
-                <n-radio class="sort-item" v-for="item in orders"
-                         :checked="order === item.value" :key="item.value" :value="item.value">
-                  {{ item.label }}
-                </n-radio>
-              </n-space>
-            </n-radio-group>
-          </div>
+    <n-empty v-if="!listLoading && !listError && !MediaDbInfo.length" :description="filterCount ? '没有符合当前筛选条件的影片' : '当前媒体库暂无影片'" class="catalog-empty" />
+    <nav class="catalog-pagination" aria-label="列表翻页"><n-button @click="BackPage()" :disabled="listLoading || !resultsMatch || page <= 1" secondary>上一页</n-button><span>第 {{ page }} 页<span v-if="totalPages"> / {{ totalPages }}</span></span><n-button @click="NextPage()" :disabled="listLoading || !resultsMatch || !hasNextPage" secondary>下一页</n-button></nav>
+    <n-modal :show="showSort" @update:show="value => { if (!value) closeSort(); }" transform-origin="center">
+      <n-card class="catalog-filter-card" title="筛选与排序" :bordered="false" size="large" role="dialog" aria-modal="true" aria-label="筛选与排序">
+        <template #header-extra><n-button @click="closeSort" quaternary circle aria-label="关闭筛选与排序"><i class="bx bx-x"></i></n-button></template>
+        <p class="page-description">调整后点击应用；关闭面板不会改变当前列表。重置会还原面板中的筛选与排序。</p>
+        <p v-if="filterOptionsLoading" role="status" class="page-description">正在加载片库筛选选项…</p>
+        <n-alert v-if="filterOptionsError" type="warning" class="filter-options-alert">{{ filterOptionsError }} <n-button text :loading="filterOptionsLoading" @click="getFilterOptions">重试</n-button></n-alert>
+        <div class="catalog-filter-form">
+          <div><label id="catalog-type-label">媒体类型</label><n-select v-model:value="draftFilters.type" :options="[{value: '', label: '全部类型'}, ...typeOptions]" clearable placeholder="全部类型" aria-labelledby="catalog-type-label" /></div>
+          <div><label id="catalog-genre-label">题材</label><n-select v-model:value="draftFilters.genres" :options="genreOptions" clearable filterable :loading="filterOptionsLoading" placeholder="全部题材" aria-labelledby="catalog-genre-label" /></div>
+          <div><label id="catalog-decade-label">年代</label><n-select v-model:value="draftFilters.decade" :options="[{value: '', label: '全部年代'}, ...filterOptions.decades]" clearable :loading="filterOptionsLoading" placeholder="全部年代" aria-labelledby="catalog-decade-label" /></div>
+          <div><label id="catalog-watched-label">观看状态</label><n-select v-model:value="draftFilters.watched" :options="[{value: '', label: '全部状态'}, ...watchedOptions]" clearable placeholder="全部状态" aria-labelledby="catalog-watched-label" /></div>
+          <div><label id="catalog-sort-label">排序方式</label><n-select v-model:value="draftMode" :options="modes" aria-labelledby="catalog-sort-label" /></div>
+          <div><label id="catalog-order-label">排序顺序</label><n-select v-model:value="draftOrder" :options="orders" aria-labelledby="catalog-order-label" /></div>
         </div>
+        <template #footer><div class="catalog-filter-actions"><n-button @click="resetDraft" aria-label="重置面板中的筛选与排序">重置</n-button><span></span><n-button @click="closeSort">取消</n-button><n-button type="primary" @click="applyFilters">应用</n-button></div></template>
       </n-card>
     </n-modal>
   </div>
 </template>
+
+<style scoped>
+.catalog-filter-card{width:min(600px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow-y:auto}
+.catalog-filter-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 18px;padding:12px 0}
+.catalog-filter-form label{display:block;font-size:13px;margin-bottom:8px;color:var(--cinema-muted)}
+.catalog-filter-actions{display:flex;align-items:center;gap:10px}.catalog-filter-actions>span{flex:1}.filter-options-alert{margin:12px 0}
+@media(max-width:480px){.catalog-filter-form{grid-template-columns:minmax(0,1fr);gap:14px}}
+</style>
