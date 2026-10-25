@@ -2,6 +2,22 @@
 import {defineStore} from 'pinia'
 import {ref, reactive} from 'vue'
 import {MediaSearch, createSearchState} from './media-search.js'
+import {LibraryViews} from './library-views.js'
+import {BrowseSnapshots} from './browse-snapshots.js'
+
+export const useBrowseSnapshots = defineStore('BrowseSnapshots', () => {
+    const snapshots = new BrowseSnapshots();
+    const revision = ref(0);
+    return {revision, setAccount: value => { snapshots.setAccount(value); revision.value = snapshots.revision; },
+        get: (user, key) => snapshots.get(user, key), save: (user, key, value, version) => snapshots.save(user, key, value, version)};
+})
+
+export const useLibraryViews = defineStore('LibraryViews', () => {
+    const views = new LibraryViews();
+    const account = ref('');
+    return {account, setAccount: value => { views.setAccount(value); account.value = views.account; },
+        get: (user, library) => views.get(user, library), save: (user, library, state) => views.save(user, library, state)};
+})
 
 export const useMediaSearch = defineStore('MediaSearch', () => {
     const state = reactive(createSearchState());
@@ -18,9 +34,10 @@ export const useMediaDbData = defineStore('MediaDbData', () => {
     const list = ref([])
     const info = ref({})
     const errors = ref({})
+    const loading = ref({})
     const sort_column = ref("create_time");
     const sort_type = ref("DESC");
-    return {list, info, errors, sort_column, sort_type}
+    return {list, info, errors, loading, sort_column, sort_type}
 })
 
 export const usePlayerData = defineStore("PlayerData", () => {

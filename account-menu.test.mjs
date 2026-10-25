@@ -13,6 +13,8 @@ const media = {info: {library: {}}, errors: {library: 'error'}, list: [{guid: 'l
 const context = vm.createContext({COMMON, MediaDbData: media, data: ref(media.list),
   UserInfo: ref({username: '示例用户'}), serviceVersion: ref(''),
   mediaSearch: {setAccount: value => { searchAccount = value; }, clearHistory: () => { historyClears++; }},
+  libraryViews: {setAccount: value => { assert.equal(value, ''); }}, homeLoads: new Map(),
+  browseSnapshots: {setAccount: value => { assert.equal(value, ''); }},
   catalogCache: {clear: () => { cacheClears++; }}, VueCookies: {remove: name => removed.push(name)},
   setTimeout: callback => { timers.push(callback); }, location: {reload: () => { reloads++; }}});
 const handlers = app.slice(app.indexOf('async function getServiceVersion()'), app.indexOf('async function GetMediaDbList()')) +

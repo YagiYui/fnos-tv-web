@@ -13,7 +13,6 @@ import Snackbar from 'node-snackbar';
 import "node-snackbar/dist/snackbar.min.css"
 import 'boxicons/css/boxicons.min.css'
 import './registerServiceWorker'
-import VueLazyload from 'vue-lazyload'
 import {errorText} from './compat.js';
 import {applyDocumentTheme, readThemePreference} from './theme.js';
 import './assets/cinema.css';
@@ -30,7 +29,6 @@ app.use(VueCookies);
 app.use(naive)
 
 
-app.use(VueLazyload)
 
 app.use(router)
 
