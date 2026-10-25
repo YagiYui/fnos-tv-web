@@ -1,6 +1,17 @@
 // store.js
 import {defineStore} from 'pinia'
-import {ref} from 'vue'
+import {ref, reactive} from 'vue'
+import {MediaSearch, createSearchState} from './media-search.js'
+
+export const useMediaSearch = defineStore('MediaSearch', () => {
+    const state = reactive(createSearchState());
+    let storage = null;
+    try { storage = window.localStorage; } catch { /* History is optional. */ }
+    const search = new MediaSearch({state, storage});
+    return {state, setAccount: account => search.setAccount(account),
+        submit: (requests, query) => search.submit(requests, query), cancel: () => search.cancel(),
+        clear: () => search.clear(), clearHistory: () => search.clearHistory(), showMore: () => search.showMore()};
+})
 
 
 export const useMediaDbData = defineStore('MediaDbData', () => {
