@@ -16,6 +16,9 @@ import {playbackTitle, playbackSelection, nextEpisode, previousEpisode} from './
 import {renderDanmaku} from './danmaku-renderer.js';
 import {PlaybackSession, createProgressReporter} from './playback-session.js';
 import {loadPlaybackMetadata, primaryMediaFile} from './playback-metadata.js';
+import {mediaFileLabel} from './media-files.js';
+import {shiftVtt, localSubtitleVtt, MAX_LOCAL_SUBTITLE_BYTES} from './subtitle-adjustments.js';
+import {playbackDiagnostics} from './playback-diagnostics.js';
 import PlaybackRecoveryCard from './PlaybackRecoveryCard.vue';
 import {isPlaybackAbort, playbackFailureMessage, lowerPlaybackQuality, switchRecoverableSource, bufferedPlaybackFailure} from './playback-recovery.js';
 import {chooseAudio, audioLabel, createAutoplayCountdown} from './audio-tracks.js';
@@ -89,6 +92,53 @@ const episode_guid = ref(null);
 const gallery_type = ref(null);
 const EpisodeList = ref(null);
 const StreamList = ref(null);
+const allMediaStreams = ref(null);
+const showMediaFiles = ref(false);
+const selectedMediaGuid = ref(null);
+const mediaFileResume = ref(false);
+const mediaFileBusy = ref(false);
+const mediaFileOptions = computed(() => (allMediaStreams.value?.files || []).map(file => ({value: file.guid,
+  label: mediaFileLabel(file, allMediaStreams.value)})));
+const selectedMediaLabel = computed(() => mediaFileOptions.value.find(file => file.value === StreamList.value?.selected_media_guid)?.label || '当前文件');
+async function openMediaFiles() {
+  selectedMediaGuid.value = StreamList.value?.selected_media_guid;
+  mediaFileResume.value = false;
+  if (art) art.setting.show = false;
+  if (art?.fullscreen) art.fullscreen = false;
+  if (art?.fullscreenWeb) art.fullscreenWeb = false;
+  showMediaFiles.value = true;
+}
+async function applyMediaFile() {
+  if (mediaFileBusy.value || !selectedMediaGuid.value) return;
+  const owner = preferenceHandle;
+  if (selectedMediaGuid.value === StreamList.value?.selected_media_guid) { showMediaFiles.value = false; return; }
+  const position = mediaFileResume.value ? Math.max(0, Number(art?.currentTime) || 0) : 0;
+  const paused = art?.video?.paused ?? true;
+  void SendPlayRecord();
+  mediaFileBusy.value = true;
+  try {
+    await play({mediaGuid: selectedMediaGuid.value, position, paused});
+    if (owner.isCurrent()) showMediaFiles.value = false;
+  } catch (error) { if (owner.isCurrent() && !isPlaybackAbort(error)) COMMON.ShowMsg(errorText(error)); }
+  finally { mediaFileBusy.value = false; }
+}
+const showDiagnostics = ref(false);
+const diagnosticText = ref('');
+function refreshDiagnostics() {
+  diagnosticText.value = JSON.stringify(playbackDiagnostics({video: art?.video, engine: art ? currentMediaEngine(art) : null,
+    videoTrack: StreamList.value?.video_streams?.[0], audioTrack: currentAudio.value, quality: currentQuality.value,
+    subtitleMode: subtitleRenderMode.value, failure: recoveryState.value, use302: use_302_play.value}), null, 2);
+}
+function openDiagnostics() {
+  if (art) art.setting.show = false;
+  if (art?.fullscreen) art.fullscreen = false;
+  if (art?.fullscreenWeb) art.fullscreenWeb = false;
+  refreshDiagnostics(); showDiagnostics.value = true;
+}
+async function copyDiagnostics() {
+  try { await navigator.clipboard.writeText(diagnosticText.value); COMMON.ShowMsg('已复制脱敏诊断'); }
+  catch { COMMON.ShowMsg('浏览器未允许复制，请选中文本手动复制'); }
+}
 const QualityData = ref(null);
 const playInfo = ref(null);
 async function backFromPlayer() {
@@ -192,6 +242,7 @@ async function openExternalPlayback(snapshot = null) {
       audioGuid: selection?.audioGuid ?? currentAudio.value?.guid,
       subtitleGuid: selection?.subtitleGuid ?? currentSubtitle.value?.guid ?? '', maxAudioChannels: device.mediaCanPlay.audioChannels,
       preferFile: preferExternalFile,
+      mediaGuid: StreamList.value?.selected_media_guid,
     });
     if (!current()) { if (source.play_link) void mediaP('media.quit', source.play_link).catch(() => {}); return; }
     externalSessionLink = source.play_link || '';
@@ -327,6 +378,37 @@ async function useDanmakuEpisode() {
   finally { danmakuBusy.value = false; }
 }
 const currentSubtitle = ref(null);
+const subtitleOffset = ref(0);
+const subtitleBottom = ref(10);
+const subtitleOutline = ref(2);
+let rawSubtitleText = '', localSubtitleText = '';
+const localSubtitleName = ref('');
+function applySubtitleAppearance() {
+  art?.subtitle.style({bottom: `${subtitleBottom.value}%`, textShadow: subtitleOutline.value
+    ? `0 0 ${subtitleOutline.value}px #000, 1px 1px ${subtitleOutline.value}px #000, -1px -1px ${subtitleOutline.value}px #000` : 'none'});
+}
+async function setSubtitleOffset(value) {
+  subtitleOffset.value = Math.max(-60, Math.min(60, Number(value) || 0));
+  assRenderer.setOffset(subtitleOffset.value); pgsRenderer.setOffset(subtitleOffset.value);
+  if (subtitleRenderMode.value === 'text' && rawSubtitleText) await subtitleLoader.render(rawSubtitleText);
+}
+async function importLocalSubtitle(event) {
+  const file = event.target.files?.[0]; event.target.value = '';
+  if (!file) return;
+  const owner = preferenceHandle, episode = episode_guid.value, media = StreamList.value?.selected_media_guid;
+  const generation = ++subtitleSearchGeneration;
+  try {
+    if (file.size > MAX_LOCAL_SUBTITLE_BYTES) throw new Error('字幕文件超过 2 MB');
+    const text = localSubtitleVtt(await file.text(), file.name);
+    if (!owner.isCurrent() || generation !== subtitleSearchGeneration || episode !== episode_guid.value || media !== StreamList.value?.selected_media_guid) return;
+    await switchSubtitle({guid: null, index: -1, html: '关闭字幕'});
+    if (!owner.isCurrent() || generation !== subtitleSearchGeneration || episode !== episode_guid.value || media !== StreamList.value?.selected_media_guid) return;
+    localSubtitleText = text; localSubtitleName.value = file.name;
+    currentSubtitle.value = {guid: '', local: true}; subtitleRenderMode.value = 'text';
+    await subtitleLoader.render(text);
+    COMMON.ShowMsg('本地字幕已加载，仅在当前页面使用，不上传服务器');
+  } catch (error) { if (owner.isCurrent()) COMMON.ShowMsg(errorText(error)); }
+}
 let serverSubtitleGuid = null;
 let subtitleSwitchGeneration = 0;
 const useAssSubtitles = ref(preferenceHandle.read('assSubtitles'));
@@ -484,7 +566,7 @@ async function confirmPlayerPreferenceReset() {
 let currentVttBlob = null;
 let subtitleErrorShown = false;
 const subtitleLoader = new SegmentedSubtitleLoader({
-  getTime: () => art?.currentTime || 0,
+  getTime: () => Math.max(0, (art?.currentTime || 0) - subtitleOffset.value),
   fetchText: async (address) => {
     const response = await fetch(address, {
       credentials: 'same-origin', headers: {Authorization: VueCookies.get('authorization') || ''}
@@ -498,6 +580,7 @@ const subtitleLoader = new SegmentedSubtitleLoader({
     return text;
   },
   clear: () => {
+    rawSubtitleText = '';
     assRenderer.clear();
     pgsRenderer.clear();
     subtitleRenderMode.value = 'text';
@@ -508,10 +591,12 @@ const subtitleLoader = new SegmentedSubtitleLoader({
   render: async (text) => {
     if (!art || subtitleRenderMode.value !== 'text') return;
     const generation = subtitleLoader.generation;
-    const next = createBlobVTTUrl(text);
+    rawSubtitleText = text;
+    const next = createBlobVTTUrl(shiftVtt(text, subtitleOffset.value));
     const previous = currentVttBlob;
     currentVttBlob = next;
     await art.subtitle.switch(next, {type: 'vtt', encoding: 'utf-8'});
+    applySubtitleAppearance();
     if (generation === subtitleLoader.generation && currentSubtitle.value) art.subtitle.show = subtitleRenderMode.value === 'text';
     if (previous) URL.revokeObjectURL(previous);
   }
@@ -570,6 +655,7 @@ function reportPlaybackFailure(error, snapshot = null) {
   const same = playInfo.value?.guid === episode_guid.value;
   const state = snapshot || recoveryState.value || {
     episode: episode_guid.value,
+    mediaGuid: same ? StreamList.value?.selected_media_guid : undefined,
     position: sourceEpisode === episode_guid.value ? sourcePosition : null,
     paused: sourcePaused,
     audioGuid: same ? currentAudio.value?.guid : undefined,
@@ -967,7 +1053,8 @@ async function GetChannels(s) {
 async function GetPalyUrlBy302(operation = null) {
   let regex = /\d+-\d+-\S+/;
   // 获取远程挂载的视频信息
-  let remote = StreamList.value.files.find(o => regex.test(o.path))
+  let remote = primaryMediaFile(StreamList.value);
+  if (!regex.test(remote?.path || '')) return;
   if (remote !== null && remote !== undefined && use_302_play.value) {
     let _data = {
       path: remote.path
@@ -1185,6 +1272,7 @@ async function getVideoConfig() {
 // 添加字幕切换函数
 async function switchSubtitle(item, $dom, event) {
   if (!item) return '字幕';
+  localSubtitleText = ''; localSubtitleName.value = '';
   const position = Math.max(0, Math.floor(art?.currentTime || 0));
   const selection = ++subtitleSwitchGeneration;
   subtitleLoader.clear();
@@ -1390,6 +1478,15 @@ async function UpdateControl(_art) {
     onChange: item => controlsCurrent() ? setSubtitleFontSize(item.range[0], {handle: controlPreferences}) : `${subtitleFontSize.value}px`,
     onRange: item => controlsCurrent() ? setSubtitleFontSize(item.range[0], {handle: controlPreferences}) : `${subtitleFontSize.value}px`
   });
+  await addArtConfig(_art, 'setting', {name: '媒体文件', html: '版本／文件', tooltip: selectedMediaLabel.value,
+    onClick: () => { if (controlsCurrent()) void openMediaFiles(); return selectedMediaLabel.value; }});
+  await addArtConfig(_art, 'setting', {name: '字幕偏移', html: '字幕时间偏移', tooltip: `${subtitleOffset.value} 秒（正值延后）`,
+    range: [subtitleOffset.value, -60, 60, 0.5], onChange: item => { if (controlsCurrent()) void setSubtitleOffset(item.range[0]).catch(showSubtitleError); return `${subtitleOffset.value} 秒`; }});
+  await addArtConfig(_art, 'setting', {name: '字幕位置', html: '普通字幕距底部', range: [subtitleBottom.value, 0, 40, 1],
+    onChange: item => { if (controlsCurrent()) { subtitleBottom.value = item.range[0]; applySubtitleAppearance(); } return `${subtitleBottom.value}%`; }});
+  await addArtConfig(_art, 'setting', {name: '字幕描边', html: '普通字幕阴影', range: [subtitleOutline.value, 0, 5, 1],
+    onChange: item => { if (controlsCurrent()) { subtitleOutline.value = item.range[0]; applySubtitleAppearance(); } return `${subtitleOutline.value}px`; }});
+  await addArtConfig(_art, 'setting', {name: '播放诊断', html: '播放诊断', onClick: () => { if (controlsCurrent()) openDiagnostics(); return ''; }});
   const audioTracks = StreamList.value?.audio_streams || [];
   await addArtConfig(_art, 'setting', {
     name: '音轨选择', html: '音轨', tooltip: audioLabel(currentAudio.value),
@@ -1569,10 +1666,17 @@ async function play(options = null) {
       initialInfo = await GetPayInfo(guid.value, operation);
       episode_guid.value = initialInfo.item.guid;
     }
-    const metadata = await loadPlaybackMetadata(COMMON.requests, episode_guid.value, {signal: operation.signal, initialInfo});
+    const metadata = await loadPlaybackMetadata(COMMON.requests, episode_guid.value, {signal: operation.signal, initialInfo,
+      mediaGuid: options?.mediaGuid || (options?.episode === episode_guid.value ? StreamList.value?.selected_media_guid : null)});
     operation.assertCurrent();
+    if (playInfo.value?.guid !== metadata.info.item.guid || StreamList.value?.selected_media_guid !== metadata.streams.selected_media_guid) {
+      subtitleOffset.value = 0; subtitleBottom.value = 10; subtitleOutline.value = 2;
+      assRenderer.setOffset(0); pgsRenderer.setOffset(0);
+    }
+    localSubtitleText = ''; localSubtitleName.value = '';
     playInfo.value = metadata.info.item;
     StreamList.value = metadata.streams;
+    allMediaStreams.value = metadata.allStreams;
     currentAudio.value = chooseAudio(metadata.streams.audio_streams, options?.audioGuid ?? playInfo.value.audio_guid, preferredAudioLanguage.value);
     setQualityOptions(metadata.qualities);
     if (!options?.quality && qualityPreferenceFallback(currentQuality.value, preferredQuality.value)) {
@@ -1642,6 +1746,9 @@ function play_previous() { return playAdjacent(-1); }
 
 async function switchSubtitleUrl({plain = false} = {}) {
   if (!currentSubtitle.value || !urlBase.value) return;
+  if (currentSubtitle.value.local && localSubtitleText) {
+    subtitleLoader.clear(); await subtitleLoader.render(localSubtitleText); return;
+  }
   subtitleLoader.clear();
   const generation = subtitleLoader.generation;
   const selected = currentSubtitle.value;
@@ -1826,10 +1933,10 @@ const artF = async (data) => {
   });
 
   art.on('video:timeupdate', () => {
-    if (currentSubtitle.value && !subtitlePlaybackError.value) void subtitleLoader.update(art.currentTime).catch(showSubtitleError);
+    if (currentSubtitle.value && !subtitlePlaybackError.value) void subtitleLoader.update(Math.max(0, art.currentTime - subtitleOffset.value)).catch(showSubtitleError);
   });
   art.on('video:seeked', () => {
-    if (currentSubtitle.value && !subtitlePlaybackError.value) void subtitleLoader.update(art.currentTime).catch(showSubtitleError);
+    if (currentSubtitle.value && !subtitlePlaybackError.value) void subtitleLoader.update(Math.max(0, art.currentTime - subtitleOffset.value)).catch(showSubtitleError);
   });
 
   art.on('video:ended', () => {
@@ -1943,6 +2050,11 @@ watch(() => accountState.revision, () => {
   preferenceWarningShown = false;
   preferenceResetGeneration++;
   showPreferenceReset.value = false;
+  showMediaFiles.value = false;
+  showDiagnostics.value = false;
+  diagnosticText.value = '';
+  allMediaStreams.value = null;
+  localSubtitleText = ''; localSubtitleName.value = '';
   preferenceResetOwner = null;
   showModal.value = false;
   externalMediaUrl.value = '';
@@ -2128,6 +2240,9 @@ onBeforeUnmount(() => {
            :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">
     <n-space vertical :size="16">
       <n-text depth="3">ASS / SSA 默认保留字体、定位和动画。若设备渲染异常，可在播放器设置中关闭“ASS 特效字幕”；普通字幕大小滑块不覆盖 ASS 原始样式。</n-text>
+      <n-text depth="3">时间偏移支持普通文本、ASS 和 PGS，正值延后；位置、字号、阴影仅影响普通文本。本集调整不保存为全局偏好。</n-text>
+      <label>导入本地字幕（UTF-8 SRT／VTT，最大 2 MB）<input type="file" accept=".srt,.vtt" aria-label="导入本地字幕" @change="importLocalSubtitle" /></label>
+      <n-text v-if="localSubtitleName">当前本地字幕：{{ localSubtitleName }}；不上传服务器，切集或重新开播后清除。</n-text>
       <n-alert v-if="subtitlePlaybackError" type="warning" :show-icon="false">{{ subtitlePlaybackError }}</n-alert>
       <div>
         <div style="margin-bottom: 8px">现有字幕</div>
@@ -2157,6 +2272,26 @@ onBeforeUnmount(() => {
           </n-button>
         </n-space>
       </div>
+    </n-space>
+  </n-modal>
+
+  <n-modal v-model:show="showMediaFiles" title="选择版本／媒体文件" preset="card"
+    :mask-closable="!mediaFileBusy" :closable="!mediaFileBusy"
+    :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">
+    <n-space vertical :size="16">
+      <n-text>当前文件：{{ selectedMediaLabel }}</n-text>
+      <n-select v-model:value="selectedMediaGuid" :options="mediaFileOptions" :disabled="mediaFileBusy" />
+      <n-alert type="info" :show-icon="false">不同剪辑版可能时间线不同，默认从头播放；选择继续当前位置时请自行确认时间线。轨道和画质按所选文件重新读取。</n-alert>
+      <n-checkbox v-model:checked="mediaFileResume" :disabled="mediaFileBusy">继续当前播放位置</n-checkbox>
+      <n-button type="primary" :loading="mediaFileBusy" @click="applyMediaFile">应用文件</n-button>
+    </n-space>
+  </n-modal>
+  <n-modal v-model:show="showDiagnostics" title="播放诊断" preset="card"
+    :style="{width: 'min(680px, 94vw)', maxHeight: '85vh', overflowY: 'auto'}">
+    <n-space vertical :size="16">
+      <n-text depth="3">显示浏览器当前缓冲、编码、请求画质和错误代码。服务端未提供确切转码状态时标为 unknown；不从编码或链接猜测。导出不含影片路径、账号、会话、地址或凭据。</n-text>
+      <n-input type="textarea" :value="diagnosticText" readonly :autosize="{minRows: 12, maxRows: 24}" :input-props="{'aria-label': '脱敏播放诊断'}" />
+      <n-space><n-button @click="refreshDiagnostics">刷新</n-button><n-button @click="copyDiagnostics">复制脱敏诊断</n-button></n-space>
     </n-space>
   </n-modal>
 

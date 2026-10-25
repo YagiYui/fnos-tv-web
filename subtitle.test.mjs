@@ -53,7 +53,7 @@ assert.equal(r2.length,1); assert.ok(r2[0].includes('NEW TRACK'));
 const src = fs.readFileSync('./src/views/Play/VideoPlayer.vue','utf8');
 const fn = src.slice(src.indexOf('async function switchSubtitle('), src.indexOf('async function addArtConfig('));
 const calls=[];let switches=0;let clears=0;
-const context={subtitleSwitchGeneration:0,serverSubtitleGuid:null,isPgsSubtitle,streamSubtitleGuid,art:{currentTime:27.9},urlBase:{value:'/v/media/session/preset.m3u8'},currentSubtitle:{value:null},
+const context={localSubtitleText:'',localSubtitleName:{value:''},subtitleSwitchGeneration:0,serverSubtitleGuid:null,isPgsSubtitle,streamSubtitleGuid,art:{currentTime:27.9},urlBase:{value:'/v/media/session/preset.m3u8'},currentSubtitle:{value:null},
   subtitlePlaybackError:{value:''},subtitleTrackGuid:{value:''},
   playInfo:{value:{}},url:{value:''},subtitleErrorShown:false,subtitleLoader:{clear(){clears++}},
   COMMON:{requests:async(...a)=>{calls.push(a);return {result:'succ'}}},

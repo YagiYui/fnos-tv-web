@@ -20,6 +20,14 @@ export class SubtitleOverlay {
     this.instance = null;
     this.generation = 0;
     this.cancel = null;
+    this.offset = 0;
+  }
+  setOffset(seconds) {
+    this.offset = Number.isFinite(seconds) ? Math.max(-60, Math.min(60, seconds)) : 0;
+    if (this.instance) {
+      this.instance.timeOffset = -this.offset;
+      if (this.kind === 'ass' && this.instance.video) this.instance.setCurrentTime?.(this.instance.video.currentTime - this.offset);
+    }
   }
   clear() {
     this.generation++;
@@ -43,7 +51,7 @@ export class SubtitleOverlay {
       }, 30000);
       this.cancel = () => { clearTimeout(timeout); resolve(false); };
       const options = {
-        video, subContent: text,
+        video, subContent: text, timeOffset: -this.offset,
         workerUrl: '/vendor/libass/subtitles-octopus-worker.js',
         legacyWorkerUrl: '/vendor/libass/subtitles-octopus-worker-legacy.js',
         fallbackFont: '/vendor/libass/DroidSansFallbackFull.ttf',
